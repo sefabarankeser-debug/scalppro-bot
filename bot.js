@@ -3,6 +3,10 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 
 const alertedCoins = new Map();
 
+const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+};
+
 async function sendTelegramMessage(text) {
     const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     try {
@@ -22,7 +26,7 @@ async function sendTelegramMessage(text) {
 }
 
 function calculateRSI(klines, period = 14) {
-    if (klines.length < period + 1) return 50;
+    if (!Array.isArray(klines) || klines.length < period + 1) return 50;
     let gains = 0, losses = 0;
     for (let i = 1; i <= period; i++) {
         let change = parseFloat(klines[i][4]) - parseFloat(klines[i-1][4]);
@@ -48,7 +52,7 @@ function calculateRSI(klines, period = 14) {
 
 async function fetchOrderBookWall(symbol) {
     try {
-        const res = await fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=20`);
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=20`, { headers });
         const data = await res.json();
         if (!data || !data.bids || !data.asks) return null;
 
@@ -72,9 +76,9 @@ async function fetchOrderBookWall(symbol) {
 
 async function fetchMetrics(symbol) {
     try {
-        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=60`);
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=60`, { headers });
         const klines = await res.json();
-        if (!klines || klines.length < 20) return null;
+        if (!Array.isArray(klines) || klines.length < 20) return null;
 
         const currentPrice = parseFloat(klines[klines.length - 1][4]);
         const rsi = calculateRSI(klines.slice(-30));
@@ -92,11 +96,15 @@ async function fetchMetrics(symbol) {
 async function scanMarket() {
     try {
         console.log("Piyasa taranıyor...", new Date().toLocaleTimeString('tr-TR'));
-        const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
+        const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { headers });
         const data = await res.json();
 
-        // Minimum 5M USDT Hacim filtresi ve İlk 50 Coin
-        let candidates = data.filter(c => c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
+        if (!Array.isArray(data)) {
+            console.error("Binance yanıtı dizi değil:", data);
+            return;
+        }
+
+        let candidates = data.filter(c => c.symbol && c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
         candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
         candidates = candidates.slice(0, 50);
 
@@ -111,7 +119,6 @@ async function scanMarket() {
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             const now = Date.now();
 
-            // Aynı coin için 15 dakika içinde tekrar bildirim atma
             if (now - lastAlertTime < 15 * 60 * 1000) continue;
 
             let signalType = null;
