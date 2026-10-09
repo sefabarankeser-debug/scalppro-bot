@@ -13,14 +13,14 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 
 const alertedCoins = new Map();
 
-// Binance Futures en yüksek hacimli ve en aktif 40 USDT paritesi
+// Tamamı Binance Futures'ta aktif ve yüksek hacimli 40 parite (TON ve FTM yerine TRX ve BCH eklendi)
 const TARGET_COINS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
     "BNBUSDT", "SUIUSDT", "PEPEUSDT", "AVAXUSDT", "NEARUSDT",
     "LINKUSDT", "WIFUSDT", "APTUSDT", "SHIBUSDT", "ADAUSDT",
-    "TAOUSDT", "FETUSDT", "SEIUSDT", "FTMUSDT", "RENDERUSDT",
+    "TAOUSDT", "FETUSDT", "SEIUSDT", "TRXUSDT", "RENDERUSDT",
     "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "KASUSDT",
-    "NOTUSDT", "FLOKIUSDT", "BONKUSDT", "TONUSDT", "PENDLEUSDT",
+    "NOTUSDT", "FLOKIUSDT", "BONKUSDT", "BCHUSDT", "PENDLEUSDT",
     "GALAUSDT", "STXUSDT", "ORDIUSDT", "RUNEUSDT", "AAVEUSDT",
     "LDOUSDT", "WLDUSDT", "JUPUSDT", "ENAUSDT", "POLUSDT"
 ];
@@ -133,7 +133,7 @@ async function scanMarket() {
             const cleanSymbol = symbol.replace('USDT', '');
 
             const metrics = await fetchMetrics(symbol);
-            await sleep(800); // 40 coin için dengeli güvenli aralık
+            await sleep(800);
 
             if (!metrics) continue;
 
@@ -142,6 +142,9 @@ async function scanMarket() {
             const now = Date.now();
 
             if (now - lastAlertTime < 15 * 60 * 1000) continue;
+
+            // Fiyatı oynamayan ölü pariteleri filtrelemek için kontrol (change10m sıfır ve RSI 100 ise atla)
+            if (change10m === 0 && (rsi === 100 || rsi === 0)) continue;
 
             let signalType = null;
             if (rsi >= 78) signalType = "🔴 SHORT ADAYI (Aşırı Alım)";
@@ -180,7 +183,6 @@ async function scanMarket() {
 async function runLoop() {
     while (true) {
         await scanMarket();
-        // 40 coin tarandıktan sonra 25 saniye dinlenip yeni tura geçer
         await sleep(25000);
     }
 }
