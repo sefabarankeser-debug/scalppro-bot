@@ -23,18 +23,25 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function sendTelegramMessage(text) {
     const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     try {
-        await fetch(url, {
+        const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 chat_id: CHAT_ID,
                 text: text,
-                parse_mode: 'Markdown',
-                disable_web_page_preview: false
+                parse_mode: 'HTML', // Markdown çökme riskini tamamen sıfırladık
+                disable_web_page_preview: true
             })
         });
+        
+        const data = await response.json();
+        if (!data.ok) {
+            console.error("🔴 Telegram Gönderim Hatası:", data.description);
+        } else {
+            console.log("🟢 Telegram mesajı başarıyla iletildi.");
+        }
     } catch (e) {
-        console.error("Telegram mesaj hatası:", e.message);
+        console.error("🔴 Telegram Ağ Hatası:", e.message);
     }
 }
 
@@ -123,7 +130,7 @@ async function scanMarket() {
 
         let candidates = data.filter(c => c.symbol && c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
         candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-        candidates = candidates.slice(0, 15); // En hacimli ilk 15 coin
+        candidates = candidates.slice(0, 15);
 
         let signalSentInThisCycle = false;
 
@@ -132,7 +139,7 @@ async function scanMarket() {
             const cleanSymbol = symbol.replace('USDT', '');
 
             const metrics = await fetchMetrics(symbol);
-            await sleep(1000); // 1 tam saniye güvenli gecikme
+            await sleep(1500); // Binance IP koruması için son derece güvenli aralık (1.5 sn)
 
             if (!metrics) continue;
 
@@ -151,13 +158,13 @@ async function scanMarket() {
                 const wallText = wallInfo ? `\n${wallInfo}` : '';
                 const binanceUrl = `https://www.binance.com/tr/futures/${symbol}`;
 
-                const msg = `⚡ *SCALP PRO SİNYALİ* ⚡\n\n` +
-                            `🪙 *Coin:* #${cleanSymbol}/USDT\n` +
-                            `🎯 *Sinyal:* ${signalType}\n` +
-                            `📈 *10dk Değişim:* %${change10m.toFixed(2)}\n` +
-                            `⚠️ *RSI:* ${rsi}\n` +
-                            `💵 *Fiyat:* $${currentPrice}${wallText}\n\n` +
-                            `🔗 [Binance Futures'ta Aç](${binanceUrl})`;
+                const msg = `⚡ <b>SCALP PRO SİNYALİ</b> ⚡\n\n` +
+                            `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
+                            `🎯 <b>Sinyal:</b> ${signalType}\n` +
+                            `📈 <b>10dk Değişim:</b> %${change10m.toFixed(2)}\n` +
+                            `⚠️ <b>RSI:</b> ${rsi}\n` +
+                            `💵 <b>Fiyat:</b> $${currentPrice}${wallText}\n\n` +
+                            `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>`;
 
                 await sendTelegramMessage(msg);
                 alertedCoins.set(symbol, now);
@@ -165,10 +172,9 @@ async function scanMarket() {
             }
         }
 
-        // Eğer bu döngüde hiçbir sinyal gönderilmediyse durumu bildir
         if (!signalSentInThisCycle) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
-            const noSignalMsg = `⏳ *[${timeNow}]* Bu dakika içinde uygun scalp fırsatı (RSI >= 78 veya <= 22) bulunamadı. Tarama devam ediyor...`;
+            const noSignalMsg = `⏳ <b>[${timeNow}]</b> Bu dakika içinde uygun scalp fırsatı (RSI >= 78 veya <= 22) bulunamadı. Tarama devam ediyor...`;
             await sendTelegramMessage(noSignalMsg);
         }
 
