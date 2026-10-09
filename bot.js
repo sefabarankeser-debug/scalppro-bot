@@ -13,6 +13,18 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 
 const alertedCoins = new Map();
 
+// Binance Futures en yüksek hacimli ve en aktif 40 USDT paritesi
+const TARGET_COINS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+    "BNBUSDT", "SUIUSDT", "PEPEUSDT", "AVAXUSDT", "NEARUSDT",
+    "LINKUSDT", "WIFUSDT", "APTUSDT", "SHIBUSDT", "ADAUSDT",
+    "TAOUSDT", "FETUSDT", "SEIUSDT", "FTMUSDT", "RENDERUSDT",
+    "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "KASUSDT",
+    "NOTUSDT", "FLOKIUSDT", "BONKUSDT", "TONUSDT", "PENDLEUSDT",
+    "GALAUSDT", "STXUSDT", "ORDIUSDT", "RUNEUSDT", "AAVEUSDT",
+    "LDOUSDT", "WLDUSDT", "JUPUSDT", "ENAUSDT", "POLUSDT"
+];
+
 const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
 };
@@ -48,7 +60,6 @@ function calculateRSI(klines, period = 14) {
     if (!Array.isArray(klines) || klines.length < period + 1) return 50;
     let gains = 0, losses = 0;
     for (let i = 1; i <= period; i++) {
-        let change = parseFloat(klines[i][4]) - parseFloat(klize = parseFloat(klines[i-1][4]));
         let diff = parseFloat(klines[i][4]) - parseFloat(klines[i-1][4]);
         if (diff >= 0) gains += diff;
         else losses += Math.abs(diff);
@@ -57,13 +68,13 @@ function calculateRSI(klines, period = 14) {
     let avgLoss = losses / period;
 
     for (let i = period + 1; i < klines.length; i++) {
-        let change = parseFloat(klines[i][4]) - parseFloat(klines[i-1][4]);
-        if (change >= 0) {
-            avgGain = (avgGain * 13 + change) / 14;
+        let diff = parseFloat(klines[i][4]) - parseFloat(klines[i-1][4]);
+        if (diff >= 0) {
+            avgGain = (avgGain * 13 + diff) / 14;
             avgLoss = (avgLoss * 13) / 14;
         } else {
             avgGain = (avgGain * 13) / 14;
-            avgLoss = (avgLoss * 13 + Math.abs(change)) / 14;
+            avgLoss = (avgLoss * 13 + Math.abs(diff)) / 14;
         }
     }
     if (avgLoss === 0) return 100;
@@ -115,32 +126,14 @@ async function fetchMetrics(symbol) {
 
 async function scanMarket() {
     try {
-        console.log("Piyasa taranıyor (Top 30)...", new Date().toLocaleTimeString('tr-TR'));
-        const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', { headers });
-        const data = await res.json();
-
-        if (!Array.isArray(data)) {
-            if (data && data.code === -1003) {
-                console.log("Binance istek sınırı uyarısı alındı, 30 saniye bekleniyor...");
-                await sleep(30000);
-            } else {
-                console.error("Binance yanıtı dizi değil:", data);
-            }
-            return;
-        }
-
-        let candidates = data.filter(c => c.symbol && c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
-        candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-        candidates = candidates.slice(0, 30);
-
+        console.log("Piyasa taranıyor (Top 40 Parite)...", new Date().toLocaleTimeString('tr-TR'));
         let signalSentInThisCycle = false;
 
-        for (const coin of candidates) {
-            const symbol = coin.symbol;
+        for (const symbol of TARGET_COINS) {
             const cleanSymbol = symbol.replace('USDT', '');
 
             const metrics = await fetchMetrics(symbol);
-            await sleep(800); // Hızlı ve güvenli istek aralığı
+            await sleep(800); // 40 coin için dengeli güvenli aralık
 
             if (!metrics) continue;
 
@@ -175,7 +168,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
-            const noSignalMsg = `⏳ <b>[${timeNow}]</b> Top 30 coin tarandı, bu turda uygun scalp fırsatı bulunamadı.`;
+            const noSignalMsg = `⏳ <b>[${timeNow}]</b> 40 coin tarandı, bu turda uygun scalp fırsatı bulunamadı.`;
             await sendTelegramMessage(noSignalMsg);
         }
 
@@ -184,12 +177,11 @@ async function scanMarket() {
     }
 }
 
-// Üst üste binmeyi önleyen kesintisiz güvenli döngü
 async function runLoop() {
     while (true) {
         await scanMarket();
-        // 30 coinin taraması bittikten sonra tam 45 saniye dinlenip Binance kotasını sıfırlıyoruz
-        await sleep(45000);
+        // 40 coin tarandıktan sonra 25 saniye dinlenip yeni tura geçer
+        await sleep(25000);
     }
 }
 
