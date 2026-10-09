@@ -123,14 +123,16 @@ async function scanMarket() {
 
         let candidates = data.filter(c => c.symbol && c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
         candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-        candidates = candidates.slice(0, 15); // En hacimli ilk 15 coin (Rate limit için sıfır hata)
+        candidates = candidates.slice(0, 15); // En hacimli ilk 15 coin
+
+        let signalSentInThisCycle = false;
 
         for (const coin of candidates) {
             const symbol = coin.symbol;
             const cleanSymbol = symbol.replace('USDT', '');
 
             const metrics = await fetchMetrics(symbol);
-            await sleep(500); // 500ms güvenli gecikme
+            await sleep(1000); // 1 tam saniye güvenli gecikme
 
             if (!metrics) continue;
 
@@ -159,13 +161,11 @@ async function scanMarket() {
 
                 await sendTelegramMessage(msg);
                 alertedCoins.set(symbol, now);
+                signalSentInThisCycle = true;
             }
         }
-    } catch (err) {
-        console.error("Tarama hatası:", err.message);
-    }
-}
 
-// Her 30 saniyede bir tara
-setInterval(scanMarket, 30000);
-scanMarket();
+        // Eğer bu döngüde hiçbir sinyal gönderilmediyse durumu bildir
+        if (!signalSentInThisCycle) {
+            const timeNow = new Date().toLocaleTimeString('tr-TR');
+            const noSignalMsg = `⏳ *[${timeNow}]* Bu dakika içinde uygun scalp fırsatı (RSI >= 78 veya
