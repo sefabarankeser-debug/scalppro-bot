@@ -14,7 +14,6 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 const alertedCoins = new Map();
 let lastStatusReportTime = 0;
 
-// Binance USDⓈ-M resmi sembolleriyle teyitli 40 parite
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -110,8 +109,8 @@ async function fetchOrderBookWall(symbol) {
             if (val > maxBidWall) maxBidWall = val;
         });
 
-        if (maxAskWall >= 250000) return `🧱 $${(maxAskWall / 1000).toFixed(0)}K Satış Duvarı`;
-        if (maxBidWall >= 250000) return `🧱 $${(maxBidWall / 1000).toFixed(0)}K Alış Duvarı`;
+        if (maxAskWall >= 200000) return `🧱 $${(maxAskWall / 1000).toFixed(0)}K Satış Duvarı`;
+        if (maxBidWall >= 200000) return `🧱 $${(maxBidWall / 1000).toFixed(0)}K Alış Duvarı`;
         return null;
     } catch (e) {
         return null;
@@ -194,7 +193,7 @@ async function fetchAnalysis(symbol) {
 
 async function scanMarket() {
     try {
-        console.log("Piyasa taranıyor (Teyit Korumalı Scalp Motoru)...", new Date().toLocaleTimeString('tr-TR'));
+        console.log("Piyasa taranıyor (Optimize Scalp Motoru)...", new Date().toLocaleTimeString('tr-TR'));
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -222,33 +221,35 @@ async function scanMarket() {
 
             let signal = null;
 
+            // SHORT: RSI >= 70, Üst banda temas var, Kırmızı mum dönüşü var, Hacim >= 1.2x
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const isBearishCandle = currentPrice < openPrice;
 
-            if (rsi1m >= 74 && touchedUpper && isBearishCandle && volMultiplier >= 1.5 && rsi1h <= 62 && btc.btcTrend !== "PUMP") {
+            if (rsi1m >= 70 && touchedUpper && isBearishCandle && volMultiplier >= 1.2 && rsi1h <= 65 && btc.btcTrend !== "PUMP") {
                 const highestPoint = Math.max(highPrice, prevHigh);
-                const sl = (highestPoint * 1.003).toFixed(4);
+                const sl = (highestPoint * 1.0025).toFixed(4);
                 const tp = bb.middle.toFixed(4);
                 signal = {
                     type: "🔴 SHORT SCALP (Dönüş Teyitli)",
                     sl,
                     tp,
-                    reason: `Bant reddedildi (Kırmızı Dönüş Mumu), Hacim ${volMultiplier}x, 1s RSI (${rsi1h})`
+                    reason: `Bant Reddi (Kırmızı Mum), Hacim ${volMultiplier}x, 1s RSI (${rsi1h})`
                 };
             }
 
+            // LONG: RSI <= 30, Alt banda temas var, Yeşil mum dönüşü var, Hacim >= 1.2x
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const isBullishCandle = currentPrice > openPrice;
 
-            if (rsi1m <= 26 && touchedLower && isBullishCandle && volMultiplier >= 1.5 && rsi1h >= 38 && btc.btcTrend !== "DUMP") {
+            if (rsi1m <= 30 && touchedLower && isBullishCandle && volMultiplier >= 1.2 && rsi1h >= 35 && btc.btcTrend !== "DUMP") {
                 const lowestPoint = Math.min(lowPrice, prevLow);
-                const sl = (lowestPoint * 0.997).toFixed(4);
+                const sl = (lowestPoint * 0.9975).toFixed(4);
                 const tp = bb.middle.toFixed(4);
                 signal = {
                     type: "🟢 LONG SCALP (Dönüş Teyitli)",
                     sl,
                     tp,
-                    reason: `Dipte tepki geldi (Yeşil Dönüş Mumu), Hacim ${volMultiplier}x, 1s RSI (${rsi1h})`
+                    reason: `Dip Tepkisi (Yeşil Mum), Hacim ${volMultiplier}x, 1s RSI (${rsi1h})`
                 };
             }
 
@@ -279,11 +280,11 @@ async function scanMarket() {
         }
 
         const nowTime = Date.now();
-        // Bildirim aralığı 10 dakikaya çıkarıldı (10 * 60 * 1000 ms)
+        // 10 dakikada bir durum bildirimi
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `⏳ <b>[${timeNow}]</b> 40 parite taranıyor. Son 10 dakikada şartları eksiksiz karşılayan fırsat çıkmadı, izleme sürüyor...\n\n` +
+                                `⏳ <b>[${timeNow}]</b> 40 parite taranıyor. Şartları sağlayan dönüş teyitli fırsat aranıyor, izleme sürüyor...\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
             await sendTelegramMessage(noSignalMsg);
             lastStatusReportTime = nowTime;
