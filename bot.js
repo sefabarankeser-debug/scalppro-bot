@@ -14,7 +14,7 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 const alertedCoins = new Map();
 let lastStatusReportTime = 0;
 
-// Binance USDⓈ-M Vadeli İşlemler resmi kontrat sembolleriyle birebir doğrulanmış 40 parite:
+// Binance USDⓈ-M resmi sembolleriyle teyitli 40 parite
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -154,29 +154,38 @@ async function fetchAnalysis(symbol) {
         const klines1h = await res1h.json();
         if (!Array.isArray(klines1h) || klines1h.length < 15) return null;
 
-        const currentPrice = parseFloat(klines1m[klines1m.length - 1][4]);
+        const lastCandle = klines1m[klines1m.length - 1];
+        const prevCandle = klines1m[klines1m.length - 2];
+
+        const openPrice = parseFloat(lastCandle[1]);
+        const highPrice = parseFloat(lastCandle[2]);
+        const lowPrice = parseFloat(lastCandle[3]);
+        const currentPrice = parseFloat(lastCandle[4]);
+
+        const prevHigh = parseFloat(prevCandle[2]);
+        const prevLow = parseFloat(prevCandle[3]);
+
         const rsi1m = calculateRSI(klines1m.slice(-30));
         const rsi1h = calculateRSI(klines1h);
         const bb = calculateBollinger(klines1m, 20, 2);
 
-        const currentVol = parseFloat(klines1m[klines1m.length - 1][5]);
+        const currentVol = parseFloat(lastCandle[5]);
         const pastVols = klines1m.slice(-21, -1).map(k => parseFloat(k[5]));
         const avgVol = pastVols.reduce((a, b) => a + b, 0) / pastVols.length;
         const volMultiplier = avgVol > 0 ? (currentVol / avgVol).toFixed(1) : 1;
 
-        const lastCandle = klines1m[klines1m.length - 1];
-        const high = parseFloat(lastCandle[2]);
-        const low = parseFloat(lastCandle[3]);
-
         return {
             symbol,
             currentPrice,
+            openPrice,
+            highPrice,
+            lowPrice,
+            prevHigh,
+            prevLow,
             rsi1m,
             rsi1h,
             bb,
-            volMultiplier,
-            high,
-            low
+            volMultiplier
         };
     } catch (e) {
         return null;
@@ -185,7 +194,7 @@ async function fetchAnalysis(symbol) {
 
 async function scanMarket() {
     try {
-        console.log("Piyasa taranıyor (40 Birebir Binance Vadeli Paritesi)...", new Date().toLocaleTimeString('tr-TR'));
+        console.log("Piyasa taranıyor (Teyit Korumalı Scalp Motoru)...", new Date().toLocaleTimeString('tr-TR'));
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -201,7 +210,11 @@ async function scanMarket() {
 
             if (!data || !data.bb) continue;
 
-            const { symbol: sym, currentPrice, rsi1m, rsi1h, bb, volMultiplier, high, low } = data;
+            const {
+                symbol: sym, currentPrice, openPrice, highPrice, lowPrice,
+                prevHigh, prevLow, rsi1m, rsi1h, bb, volMultiplier
+            } = data;
+
             const lastAlertTime = alertedCoins.get(sym) || 0;
             const now = Date.now();
 
@@ -209,23 +222,42 @@ async function scanMarket() {
 
             let signal = null;
 
-            if (rsi1m >= 76 && currentPrice >= bb.upper * 0.999 && volMultiplier >= 1.6 && rsi1h <= 60 && btc.btcTrend !== "PUMP") {
-                const sl = (high * 1.002).toFixed(4);
+            // KORUMALI & TEYİTLİ SHORT:
+            // 1. RSI aşırı alımda (>= 74)
+            // 2. Fiyat veya önceki mum üst bandı test etmiş/dışına taşmış
+            // 3. TEYİT: Mum kırmızıya dönmüş olmalı (currentPrice < openPrice) -> Satıcılar devreye girdi!
+            // 4. Hacim patlaması teyidi ve BTC pump engeli
+            const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
+            const isBearishCandle = currentPrice < openPrice;
+
+            if (rsi1m >= 74 && touchedUpper && isBearishCandle && volMultiplier >= 1.5 && rsi1h <= 62 && btc.btcTrend !== "PUMP") {
+                const highestPoint = Math.max(highPrice, prevHigh);
+                const sl = (highestPoint * 1.003).toFixed(4); // Fitilin üstüne güvenli pay
                 const tp = bb.middle.toFixed(4);
                 signal = {
-                    type: "🔴 SHORT SCALP",
+                    type: "🔴 SHORT SCALP (Dönüş Teyitli)",
                     sl,
                     tp,
-                    reason: `1h RSI (${rsi1h}) uygun, Hacim ${volMultiplier}x, Üst Bant Dışı`
+                    reason: `Bant reddedildi (Kırmızı Dönüş Mumu), Hacim ${volMultiplier}x, 1s RSI (${rsi1h})`
                 };
-            } else if (rsi1m <= 24 && currentPrice <= bb.lower * 1.001 && volMultiplier >= 1.6 && rsi1h >= 40 && btc.btcTrend !== "DUMP") {
-                const sl = (low * 0.998).toFixed(4);
+            }
+            // KORUMALI & TEYİTLİ LONG:
+            // 1. RSI aşırı satımda (<= 26)
+            // 2. Fiyat veya önceki mum alt bandı delmiş
+            // 3. TEYİT: Mum yeşile dönmüş olmalı (currentPrice > openPrice) -> Alıcılar devreye girdi!
+            // 4. Hacim patlaması teyidi ve BTC dump engeli
+            const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
+            const isBullishCandle = currentPrice > openPrice;
+
+            if (rsi1m <= 26 && touchedLower && isBullishCandle && volMultiplier >= 1.5 && rsi1h >= 38 && btc.btcTrend !== "DUMP") {
+                const lowestPoint = Math.min(lowPrice, prevLow);
+                const sl = (lowestPoint * 0.997).toFixed(4); // Fitilin altına güvenli pay
                 const tp = bb.middle.toFixed(4);
                 signal = {
-                    type: "🟢 LONG SCALP",
+                    type: "🟢 LONG SCALP (Dönüş Teyitli)",
                     sl,
                     tp,
-                    reason: `1h RSI (${rsi1h}) uygun, Hacim ${volMultiplier}x, Alt Bant Dışı`
+                    reason: `Dipte tepki geldi (Yeşil Dönüş Mumu), Hacim ${volMultiplier}x, 1s RSI (${rsi1h})`
                 };
             }
 
@@ -236,16 +268,16 @@ async function scanMarket() {
                 const binanceUrl = `https://www.binance.com/tr/futures/${sym}`;
 
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                            `⚡ <b>BTC KORUMALI SCALP SİNYALİ</b> ⚡\n\n` +
+                            `⚡ <b>GÜVENLİ DÖNÜŞ SİNYALİ</b> ⚡\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
                             `🎯 <b>Yön:</b> ${signal.type}\n` +
                             `💵 <b>Giriş Fiyatı:</b> $${currentPrice}\n` +
                             `🛑 <b>Önerilen Stop:</b> $${signal.sl}\n` +
                             `🎯 <b>Hedef Kâr (TP):</b> $${signal.tp}\n\n` +
                             `📊 <b>Filtre Teyitleri:</b>\n` +
-                            `• BTC 3dk Değişim: %${btc.change3m} (Stabil)\n` +
+                            `• BTC Durumu: %${btc.change3m} (Stabil)\n` +
                             `• 1dk RSI: ${rsi1m} | 1s RSI: ${rsi1h}\n` +
-                            `• Hacim Patlaması: ${signal.reason}${wallText}\n\n` +
+                            `• Dönüş İspatı: ${signal.reason}${wallText}\n\n` +
                             `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
                             `⚠️ <i>"YTD" HEPSİ.</i>`;
 
@@ -259,7 +291,7 @@ async function scanMarket() {
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 5 * 60 * 1000)) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `⏳ <b>[${timeNow}]</b> 40 onaylı vadeli parite taranıyor. Son 5 dakikada şartları eksiksiz karşılayan fırsat çıkmadı, izleme sürüyor...\n\n` +
+                                `⏳ <b>[${timeNow}]</b> 40 parite taranıyor. Bant dışına taşan hareketlerde net dönüş teyidi (fitil/mum reddi) bekleniyor, izleme sürüyor...\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
             await sendTelegramMessage(noSignalMsg);
             lastStatusReportTime = nowTime;
