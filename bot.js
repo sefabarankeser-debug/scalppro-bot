@@ -1,7 +1,4 @@
-const fetch = require('node-fetch');
-
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAHp528BFwkuhsKeP8m0NJd9WOdQlKpJpx4
-";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAHp528BFwkuhsKeP8m0NJd9WOdQlKpJpx4";
 const CHAT_ID = process.env.CHAT_ID || "956236479";
 
 const alertedCoins = new Map();
@@ -41,7 +38,7 @@ function calculateRSI(klines, period = 14) {
             avgGain = (avgGain * 13 + change) / 14;
             avgLoss = (avgLoss * 13) / 14;
         } else {
-            avgGain = (avgGain * 13) / 14;
+            avgGain = (avgGain * 13 / 14);
             avgLoss = (avgLoss * 13 + Math.abs(change)) / 14;
         }
     }
