@@ -1,3 +1,14 @@
+const http = require('http');
+
+// Render port bağlama gereksinimi için dummy HTTP sunucusu
+const PORT = process.env.PORT || 10000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('ScalpPro Bot Active\n');
+}).listen(PORT, () => {
+    console.log(`Sunucu ${PORT} portunda aktif.`);
+});
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAHp528BFwkuhsKeP8m0NJd9WOdQlKpJpx4";
 const CHAT_ID = process.env.CHAT_ID || "956236479";
 
@@ -119,7 +130,7 @@ async function scanMarket() {
             const cleanSymbol = symbol.replace('USDT', '');
 
             const metrics = await fetchMetrics(symbol);
-            await sleep(150); // Rate limit engellemek için istekler arasına 150ms gecikme
+            await sleep(200); // 200ms gecikme ile tam güvenli istek aralığı
 
             if (!metrics) continue;
 
