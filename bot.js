@@ -1,6 +1,6 @@
 const http = require('http');
 
-// Render port bağlama gereksinimi için dummy HTTP sunucusu
+// Render port bağlama için dummy HTTP sunucusu
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -114,7 +114,7 @@ async function scanMarket() {
 
         if (!Array.isArray(data)) {
             if (data && data.code === -1003) {
-                console.log("Binance istek sınırı uyarısı alındı, bekleniyor...");
+                console.log("Binance istek sınırı uyarısı alındı, 10sn bekleniyor...");
             } else {
                 console.error("Binance yanıtı dizi değil:", data);
             }
@@ -123,14 +123,14 @@ async function scanMarket() {
 
         let candidates = data.filter(c => c.symbol && c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
         candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-        candidates = candidates.slice(0, 40);
+        candidates = candidates.slice(0, 25); // En likit Top 25 coin
 
         for (const coin of candidates) {
             const symbol = coin.symbol;
             const cleanSymbol = symbol.replace('USDT', '');
 
             const metrics = await fetchMetrics(symbol);
-            await sleep(200); // 200ms gecikme ile tam güvenli istek aralığı
+            await sleep(350); // 350ms gecikme (Rate limit tam koruma)
 
             if (!metrics) continue;
 
