@@ -173,7 +173,8 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
-            const noSignalMsg = `⏳ <b>[${timeNow}]</b> Bu dakika içinde uygun scalp fırsatı (RSI >= 78 veya <= 22) bulunamadı. Tarama devam ediyor...`;
+            // HTML parser hatasını engellemek için işaretler kaldırıldı
+            const noSignalMsg = `⏳ <b>[${timeNow}]</b> Bu dakika içinde uygun scalp fırsatı (RSI 78 üstü veya 22 altı) bulunamadı. Tarama devam ediyor...`;
             await sendTelegramMessage(noSignalMsg);
         }
 
