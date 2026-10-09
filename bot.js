@@ -222,17 +222,12 @@ async function scanMarket() {
 
             let signal = null;
 
-            // KORUMALI & TEYİTLİ SHORT:
-            // 1. RSI aşırı alımda (>= 74)
-            // 2. Fiyat veya önceki mum üst bandı test etmiş/dışına taşmış
-            // 3. TEYİT: Mum kırmızıya dönmüş olmalı (currentPrice < openPrice) -> Satıcılar devreye girdi!
-            // 4. Hacim patlaması teyidi ve BTC pump engeli
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const isBearishCandle = currentPrice < openPrice;
 
             if (rsi1m >= 74 && touchedUpper && isBearishCandle && volMultiplier >= 1.5 && rsi1h <= 62 && btc.btcTrend !== "PUMP") {
                 const highestPoint = Math.max(highPrice, prevHigh);
-                const sl = (highestPoint * 1.003).toFixed(4); // Fitilin üstüne güvenli pay
+                const sl = (highestPoint * 1.003).toFixed(4);
                 const tp = bb.middle.toFixed(4);
                 signal = {
                     type: "🔴 SHORT SCALP (Dönüş Teyitli)",
@@ -241,17 +236,13 @@ async function scanMarket() {
                     reason: `Bant reddedildi (Kırmızı Dönüş Mumu), Hacim ${volMultiplier}x, 1s RSI (${rsi1h})`
                 };
             }
-            // KORUMALI & TEYİTLİ LONG:
-            // 1. RSI aşırı satımda (<= 26)
-            // 2. Fiyat veya önceki mum alt bandı delmiş
-            // 3. TEYİT: Mum yeşile dönmüş olmalı (currentPrice > openPrice) -> Alıcılar devreye girdi!
-            // 4. Hacim patlaması teyidi ve BTC dump engeli
+
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const isBullishCandle = currentPrice > openPrice;
 
             if (rsi1m <= 26 && touchedLower && isBullishCandle && volMultiplier >= 1.5 && rsi1h >= 38 && btc.btcTrend !== "DUMP") {
                 const lowestPoint = Math.min(lowPrice, prevLow);
-                const sl = (lowestPoint * 0.997).toFixed(4); // Fitilin altına güvenli pay
+                const sl = (lowestPoint * 0.997).toFixed(4);
                 const tp = bb.middle.toFixed(4);
                 signal = {
                     type: "🟢 LONG SCALP (Dönüş Teyitli)",
@@ -288,10 +279,11 @@ async function scanMarket() {
         }
 
         const nowTime = Date.now();
-        if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 5 * 60 * 1000)) {
+        // Bildirim aralığı 10 dakikaya çıkarıldı (10 * 60 * 1000 ms)
+        if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `⏳ <b>[${timeNow}]</b> 40 parite taranıyor. Bant dışına taşan hareketlerde net dönüş teyidi (fitil/mum reddi) bekleniyor, izleme sürüyor...\n\n` +
+                                `⏳ <b>[${timeNow}]</b> 40 parite taranıyor. Son 10 dakikada şartları eksiksiz karşılayan fırsat çıkmadı, izleme sürüyor...\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
             await sendTelegramMessage(noSignalMsg);
             lastStatusReportTime = nowTime;
