@@ -9,7 +9,8 @@ http.createServer((req, res) => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAHp528BFwkuhsKeP8m0NJd9WOdQlKpJpx4";
+// YENİ VE DOĞRU TOKEN EKLENDİ
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = process.env.CHAT_ID || "956236479";
 
 const alertedCoins = new Map();
@@ -29,7 +30,7 @@ async function sendTelegramMessage(text) {
             body: JSON.stringify({
                 chat_id: CHAT_ID,
                 text: text,
-                parse_mode: 'HTML', // Markdown çökme riskini tamamen sıfırladık
+                parse_mode: 'HTML',
                 disable_web_page_preview: true
             })
         });
@@ -136,53 +137,4 @@ async function scanMarket() {
 
         for (const coin of candidates) {
             const symbol = coin.symbol;
-            const cleanSymbol = symbol.replace('USDT', '');
-
-            const metrics = await fetchMetrics(symbol);
-            await sleep(1500); // Binance IP koruması için son derece güvenli aralık (1.5 sn)
-
-            if (!metrics) continue;
-
-            const { rsi, change10m, currentPrice } = metrics;
-            const lastAlertTime = alertedCoins.get(symbol) || 0;
-            const now = Date.now();
-
-            if (now - lastAlertTime < 15 * 60 * 1000) continue;
-
-            let signalType = null;
-            if (rsi >= 78) signalType = "🔴 SHORT ADAYI (Aşırı Alım)";
-            else if (rsi <= 22) signalType = "🟢 LONG ADAYI (Aşırı Satım)";
-
-            if (signalType) {
-                const wallInfo = await fetchOrderBookWall(symbol);
-                const wallText = wallInfo ? `\n${wallInfo}` : '';
-                const binanceUrl = `https://www.binance.com/tr/futures/${symbol}`;
-
-                const msg = `⚡ <b>SCALP PRO SİNYALİ</b> ⚡\n\n` +
-                            `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
-                            `🎯 <b>Sinyal:</b> ${signalType}\n` +
-                            `📈 <b>10dk Değişim:</b> %${change10m.toFixed(2)}\n` +
-                            `⚠️ <b>RSI:</b> ${rsi}\n` +
-                            `💵 <b>Fiyat:</b> $${currentPrice}${wallText}\n\n` +
-                            `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>`;
-
-                await sendTelegramMessage(msg);
-                alertedCoins.set(symbol, now);
-                signalSentInThisCycle = true;
-            }
-        }
-
-        if (!signalSentInThisCycle) {
-            const timeNow = new Date().toLocaleTimeString('tr-TR');
-            const noSignalMsg = `⏳ <b>[${timeNow}]</b> Bu dakika içinde uygun scalp fırsatı (RSI >= 78 veya <= 22) bulunamadı. Tarama devam ediyor...`;
-            await sendTelegramMessage(noSignalMsg);
-        }
-
-    } catch (err) {
-        console.error("Tarama hatası:", err.message);
-    }
-}
-
-// Her 60 saniyede bir tara
-setInterval(scanMarket, 60000);
-scanMarket();
+            const cleanSymbol = symbol.replace('
