@@ -1,6 +1,5 @@
 const http = require('http');
 
-// Render port bağlama için dummy HTTP sunucusu
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -9,7 +8,6 @@ http.createServer((req, res) => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
 
-// YENİ VE DOĞRU TOKEN EKLENDİ
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = process.env.CHAT_ID || "956236479";
 
@@ -137,4 +135,52 @@ async function scanMarket() {
 
         for (const coin of candidates) {
             const symbol = coin.symbol;
-            const cleanSymbol = symbol.replace('
+            const cleanSymbol = symbol.replace('USDT', '');
+
+            const metrics = await fetchMetrics(symbol);
+            await sleep(1500); 
+
+            if (!metrics) continue;
+
+            const { rsi, change10m, currentPrice } = metrics;
+            const lastAlertTime = alertedCoins.get(symbol) || 0;
+            const now = Date.now();
+
+            if (now - lastAlertTime < 15 * 60 * 1000) continue;
+
+            let signalType = null;
+            if (rsi >= 78) signalType = "🔴 SHORT ADAYI (Aşırı Alım)";
+            else if (rsi <= 22) signalType = "🟢 LONG ADAYI (Aşırı Satım)";
+
+            if (signalType) {
+                const wallInfo = await fetchOrderBookWall(symbol);
+                const wallText = wallInfo ? `\n${wallInfo}` : '';
+                const binanceUrl = `https://www.binance.com/tr/futures/${symbol}`;
+
+                const msg = `⚡ <b>SCALP PRO SİNYALİ</b> ⚡\n\n` +
+                            `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
+                            `🎯 <b>Sinyal:</b> ${signalType}\n` +
+                            `📈 <b>10dk Değişim:</b> %${change10m.toFixed(2)}\n` +
+                            `⚠️ <b>RSI:</b> ${rsi}\n` +
+                            `💵 <b>Fiyat:</b> $${currentPrice}${wallText}\n\n` +
+                            `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>`;
+
+                await sendTelegramMessage(msg);
+                alertedCoins.set(symbol, now);
+                signalSentInThisCycle = true;
+            }
+        }
+
+        if (!signalSentInThisCycle) {
+            const timeNow = new Date().toLocaleTimeString('tr-TR');
+            const noSignalMsg = `⏳ <b>[${timeNow}]</b> Bu dakika içinde uygun scalp fırsatı (RSI >= 78 veya <= 22) bulunamadı. Tarama devam ediyor...`;
+            await sendTelegramMessage(noSignalMsg);
+        }
+
+    } catch (err) {
+        console.error("Tarama hatası:", err.message);
+    }
+}
+
+setInterval(scanMarket, 60000);
+scanMarket();
