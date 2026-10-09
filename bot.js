@@ -38,7 +38,7 @@ function calculateRSI(klines, period = 14) {
             avgGain = (avgGain * 13 + change) / 14;
             avgLoss = (avgLoss * 13) / 14;
         } else {
-            avgGain = (avgGain * 13 / 14);
+            avgGain = (avgGain * 13) / 14;
             avgLoss = (avgLoss * 13 + Math.abs(change)) / 14;
         }
     }
@@ -95,9 +95,10 @@ async function scanMarket() {
         const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
         const data = await res.json();
 
-        let candidates = data.filter(c => c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 10000000);
+        // Minimum 5M USDT Hacim filtresi ve İlk 50 Coin
+        let candidates = data.filter(c => c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
         candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-        candidates = candidates.slice(0, 30);
+        candidates = candidates.slice(0, 50);
 
         for (const coin of candidates) {
             const symbol = coin.symbol;
@@ -110,6 +111,7 @@ async function scanMarket() {
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             const now = Date.now();
 
+            // Aynı coin için 15 dakika içinde tekrar bildirim atma
             if (now - lastAlertTime < 15 * 60 * 1000) continue;
 
             let signalType = null;
