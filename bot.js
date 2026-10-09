@@ -14,15 +14,16 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 const alertedCoins = new Map();
 let lastStatusReportTime = 0;
 
+// BTC, ETH, XRP çıkarıldı; en verimli, hızlı tepki veren 40 likit scalp paritesi eklendi
 const TARGET_COINS = [
-    "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT",
-    "SUIUSDT", "PEPEUSDT", "AVAXUSDT", "NEARUSDT", "LINKUSDT",
-    "WIFUSDT", "APTUSDT", "SHIBUSDT", "ADAUSDT", "TAOUSDT",
-    "FETUSDT", "SEIUSDT", "TRXUSDT", "RENDERUSDT", "INJUSDT",
-    "ARBUSDT", "OPUSDT", "TIAUSDT", "KASUSDT", "NOTUSDT",
-    "FLOKIUSDT", "BONKUSDT", "BCHUSDT", "PENDLEUSDT", "GALAUSDT",
-    "STXUSDT", "ORDIUSDT", "RUNEUSDT", "AAVEUSDT", "LDOUSDT",
-    "WLDUSDT", "JUPUSDT", "ENAUSDT", "POLUSDT"
+    "SOLUSDT", "DOGEUSDT", "BNBUSDT", "SUIUSDT", "PEPEUSDT",
+    "AVAXUSDT", "NEARUSDT", "LINKUSDT", "WIFUSDT", "APTUSDT",
+    "SHIBUSDT", "ADAUSDT", "TAOUSDT", "FETUSDT", "SEIUSDT",
+    "TRXUSDT", "RENDERUSDT", "INJUSDT", "ARBUSDT", "OPUSDT",
+    "TIAUSDT", "KASUSDT", "NOTUSDT", "FLOKIUSDT", "BONKUSDT",
+    "BCHUSDT", "PENDLEUSDT", "GALAUSDT", "STXUSDT", "ORDIUSDT",
+    "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT", "JUPUSDT",
+    "ENAUSDT", "POLUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT"
 ];
 
 const headers = {
@@ -117,7 +118,6 @@ async function fetchOrderBookWall(symbol) {
     }
 }
 
-// BTC'nin son 3 dakikalık anlık durumunu izleyen koruma kalkanı
 async function checkBtcCondition() {
     try {
         const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=5`, { headers });
@@ -128,7 +128,6 @@ async function checkBtcCondition() {
         const price3mAgo = parseFloat(klines[klines.length - 4][1]);
         const change3m = ((currentPrice - price3mAgo) / price3mAgo) * 100;
 
-        // BTC son 3 dakikada %0.45'ten fazla oynadıysa piyasa aşırı dalgalıdır, işlem risklidir
         const isVolatile = Math.abs(change3m) >= 0.45;
         let btcTrend = "NEUTRAL";
         if (change3m <= -0.25) btcTrend = "DUMP";
@@ -186,9 +185,8 @@ async function fetchAnalysis(symbol) {
 
 async function scanMarket() {
     try {
-        console.log("Piyasa taranıyor (BTC Korumalı Scalp Motoru)...", new Date().toLocaleTimeString('tr-TR'));
+        console.log("Piyasa taranıyor (40 Yüksek Volatiliteli Parite)...", new Date().toLocaleTimeString('tr-TR'));
 
-        // 1. Önce BTC durumunu analiz et
         const btc = await checkBtcCondition();
         if (!btc.safe) {
             console.log(`⚠️ BTC son 3 dakikada aşırı dalgalandı (%${btc.change3m}). Bu tur altcoin sinyalleri kilitlendi.`);
@@ -211,7 +209,6 @@ async function scanMarket() {
 
             let signal = null;
 
-            // KORUMALI SHORT: BTC sert yükselmiyor olmalı (btcTrend !== "PUMP")
             if (rsi1m >= 76 && currentPrice >= bb.upper * 0.999 && volMultiplier >= 1.6 && rsi1h <= 60 && btc.btcTrend !== "PUMP") {
                 const sl = (high * 1.002).toFixed(4);
                 const tp = bb.middle.toFixed(4);
@@ -221,9 +218,7 @@ async function scanMarket() {
                     tp,
                     reason: `1h RSI (${rsi1h}) uygun, Hacim ${volMultiplier}x, Üst Bant Dışı`
                 };
-            }
-            // KORUMALI LONG: BTC sert düşmüyor olmalı (btcTrend !== "DUMP")
-            else if (rsi1m <= 24 && currentPrice <= bb.lower * 1.001 && volMultiplier >= 1.6 && rsi1h >= 40 && btc.btcTrend !== "DUMP") {
+            } else if (rsi1m <= 24 && currentPrice <= bb.lower * 1.001 && volMultiplier >= 1.6 && rsi1h >= 40 && btc.btcTrend !== "DUMP") {
                 const sl = (low * 0.998).toFixed(4);
                 const tp = bb.middle.toFixed(4);
                 signal = {
@@ -264,7 +259,7 @@ async function scanMarket() {
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 5 * 60 * 1000)) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `⏳ <b>[${timeNow}]</b> 40 coin + BTC piyasa koruması devrede. Son 5 dakikada şartları eksiksiz karşılayan fırsat çıkmadı, tarama devam ediyor...\n\n` +
+                                `⏳ <b>[${timeNow}]</b> 40 dinamik parite taranıyor. Son 5 dakikada tüm scalp şartlarını sağlayan fırsat oluşmadı, izleme sürüyor...\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
             await sendTelegramMessage(noSignalMsg);
             lastStatusReportTime = nowTime;
