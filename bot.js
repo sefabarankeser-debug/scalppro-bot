@@ -14,16 +14,16 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 const alertedCoins = new Map();
 let lastStatusReportTime = 0;
 
-// TRX, ADA, BNB çıkarıldı; ARKM, CRV, NEIRO eklendi (40 Yüksek Hassasiyetli Scalp Paritesi)
+// Binance USDⓈ-M Vadeli İşlemler resmi kontrat sembolleriyle birebir doğrulanmış 40 parite:
 const TARGET_COINS = [
-    "SOLUSDT", "DOGEUSDT", "SUIUSDT", "PEPEUSDT", "AVAXUSDT",
-    "NEARUSDT", "LINKUSDT", "WIFUSDT", "APTUSDT", "SHIBUSDT",
-    "TAOUSDT", "FETUSDT", "SEIUSDT", "ARKMUSDT", "RENDERUSDT",
-    "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "KASUSDT",
-    "NOTUSDT", "FLOKIUSDT", "BONKUSDT", "BCHUSDT", "PENDLEUSDT",
-    "GALAUSDT", "STXUSDT", "ORDIUSDT", "RUNEUSDT", "AAVEUSDT",
-    "LDOUSDT", "WLDUSDT", "JUPUSDT", "ENAUSDT", "POLUSDT",
-    "ARUSDT", "CFXUSDT", "JTOUSDT", "CRVUSDT", "NEIROUSDT"
+    "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
+    "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
+    "FETUSDT", "SEIUSDT", "ARKMUSDT", "RENDERUSDT", "INJUSDT",
+    "ARBUSDT", "OPUSDT", "TIAUSDT", "NOTUSDT", "1000FLOKIUSDT",
+    "1000BONKUSDT", "BCHUSDT", "PENDLEUSDT", "GALAUSDT", "STXUSDT",
+    "ORDIUSDT", "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT",
+    "JUPUSDT", "ENAUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT",
+    "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT"
 ];
 
 const headers = {
@@ -185,7 +185,7 @@ async function fetchAnalysis(symbol) {
 
 async function scanMarket() {
     try {
-        console.log("Piyasa taranıyor (40 Yüksek Verimli Scalp Paritesi)...", new Date().toLocaleTimeString('tr-TR'));
+        console.log("Piyasa taranıyor (40 Birebir Binance Vadeli Paritesi)...", new Date().toLocaleTimeString('tr-TR'));
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -259,7 +259,7 @@ async function scanMarket() {
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 5 * 60 * 1000)) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `⏳ <b>[${timeNow}]</b> 40 optimize edilmiş parite taranıyor. Son 5 dakikada şartları eksiksiz karşılayan fırsat çıkmadı, izleme sürüyor...\n\n` +
+                                `⏳ <b>[${timeNow}]</b> 40 onaylı vadeli parite taranıyor. Son 5 dakikada şartları eksiksiz karşılayan fırsat çıkmadı, izleme sürüyor...\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
             await sendTelegramMessage(noSignalMsg);
             lastStatusReportTime = nowTime;
