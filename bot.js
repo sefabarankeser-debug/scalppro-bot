@@ -22,6 +22,14 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 const alertedCoins = new Map();
 let lastStatusReportTime = 0;
 
+// Seans bildirimlerinin günde sadece 1 kez atılması için hafıza takibi
+let lastNotifiedEvents = {
+    date: "",
+    approachingNY: false,
+    openNY: false,
+    closeNY: false
+};
+
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -93,6 +101,63 @@ async function sendTelegramMessage(text) {
         }
     } catch (e) {
         console.error("🔴 Telegram Ağ Hatası:", e.message);
+    }
+}
+
+// Kritik Seans Zamanlarını Denetleyen ve Özel Uyarı Gönderen Fonksiyon
+async function checkSessionAlerts() {
+    const now = new Date();
+    const trHour = (now.getUTCHours() + 3) % 24;
+    const trMinute = now.getUTCMinutes();
+    const todayStr = now.toISOString().slice(0, 10);
+
+    // Gün değiştiğinde bildirim kilitlerini sıfırla
+    if (lastNotifiedEvents.date !== todayStr) {
+        lastNotifiedEvents = {
+            date: todayStr,
+            approachingNY: false,
+            openNY: false,
+            closeNY: false
+        };
+    }
+
+    // 1. 16:00 TSİ: New York Seansına 30 Dk Kaldı Uyarısı
+    if (trHour === 16 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.approachingNY) {
+        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                    `⏳ <b>DİKKAT: EN HAREKETLİ SEANSA 30 DAKİKA KALDI!</b>\n\n` +
+                    `🗽 <b>16:30'da ABD (Wall Street) Piyasaları Açılıyor!</b>\n` +
+                    `• ETF işlemleri ve küresel fonlar piyasaya girmek üzere.\n` +
+                    `• Önümüzdeki dakikalarda volatilite katlanacak.\n` +
+                    `• Botumuz yüksek likidite moduna (Sıkı Filtreler) hazırlanıyor.\n\n` +
+                    `⚠️ <i>"YTD" HEPSİ.</i>`;
+        await sendTelegramMessage(msg);
+        lastNotifiedEvents.approachingNY = true;
+    }
+
+    // 2. 16:30 TSİ: New York Seansı Resmen Açıldı Uyarısı
+    if (trHour === 16 && trMinute >= 30 && trMinute < 40 && !lastNotifiedEvents.openNY) {
+        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                    `🔥 <b>NEW YORK (WALL STREET) SEANSI RESMEN AÇILDI!</b>\n\n` +
+                    `⚡ Günün en yüksek hacimli ve en sert dalgalanma dönemi başladı.\n` +
+                    `• Londra + New York aynı anda devrede (Maksimum Hacim).\n` +
+                    `• Bot filtreleri en katı seviyeye alındı (RSI 27/73 - Hacim 1.4x).\n` +
+                    `• Gelebilecek sinyaller güçlü kırılımlardan süzülecek.\n\n` +
+                    `⚠️ <i>"YTD" HEPSİ.</i>`;
+        await sendTelegramMessage(msg);
+        lastNotifiedEvents.openNY = true;
+    }
+
+    // 3. 23:00 TSİ: New York Seansı Kapandı Uyarısı
+    if (trHour === 23 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.closeNY) {
+        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                    `🌙 <b>NEW YORK SEANSI KAPANDI (PİYASA SAKİNLEŞİYOR)</b>\n\n` +
+                    `💤 ABD borsaları kapandı, günün ana hacim dalgası sona erdi.\n` +
+                    `• Piyasa yavaş yavaş yatay banda ve Asya seansına geçiş yapıyor.\n` +
+                    `• Bot gece hassasiyet moduna hazırlanıyor.\n` +
+                    `• Açık scalp işlemleriniz varsa kâr realizasyonuna dikkat edin.\n\n` +
+                    `⚠️ <i>"YTD" HEPSİ.</i>`;
+        await sendTelegramMessage(msg);
+        lastNotifiedEvents.closeNY = true;
     }
 }
 
@@ -234,6 +299,9 @@ async function fetchAnalysis(symbol) {
 
 async function scanMarket() {
     try {
+        // Seans açılış/kapanış bildirim kontrolü
+        await checkSessionAlerts();
+
         const config = getMarketParameters();
         console.log(`Piyasa taranıyor [${config.sessionName}]...`, new Date().toLocaleTimeString('tr-TR'));
 
@@ -263,6 +331,7 @@ async function scanMarket() {
 
             let signal = null;
 
+            // SHORT Kuralı
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
@@ -278,6 +347,7 @@ async function scanMarket() {
                 };
             }
 
+            // LONG Kuralı
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
