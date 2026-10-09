@@ -12,6 +12,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAE4xogVFRIqIjP
 const CHAT_ID = process.env.CHAT_ID || "956236479";
 
 const alertedCoins = new Map();
+let lastStatusReportTime = 0; // 5 dakikalık durum raporu sayacı
 
 const TARGET_COINS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
@@ -118,12 +119,10 @@ async function fetchOrderBookWall(symbol) {
 
 async function fetchAnalysis(symbol) {
     try {
-        // 1 dakikalık mumlar (Scalp tetikleyicisi)
         const res1m = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=40`, { headers });
         const klines1m = await res1m.json();
         if (!Array.isArray(klines1m) || klines1m.length < 25) return null;
 
-        // 1 saatlik mumlar (Trend filtresi)
         const res1h = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=25`, { headers });
         const klines1h = await res1h.json();
         if (!Array.isArray(klines1h) || klines1h.length < 15) return null;
@@ -133,22 +132,14 @@ async function fetchAnalysis(symbol) {
         const rsi1h = calculateRSI(klines1h);
         const bb = calculateBollinger(klines1m, 20, 2);
 
-        // Hacim analizi (Son mum vs önceki 20 mum ortalaması)
         const currentVol = parseFloat(klines1m[klines1m.length - 1][5]);
         const pastVols = klines1m.slice(-21, -1).map(k => parseFloat(k[5]));
         const avgVol = pastVols.reduce((a, b) => a + b, 0) / pastVols.length;
         const volMultiplier = avgVol > 0 ? (currentVol / avgVol).toFixed(1) : 1;
 
-        // Mum fitil hesaplaması
         const lastCandle = klines1m[klines1m.length - 1];
-        const open = parseFloat(lastCandle[1]);
         const high = parseFloat(lastCandle[2]);
         const low = parseFloat(lastCandle[3]);
-        const close = parseFloat(lastCandle[4]);
-        const totalRange = high - low;
-
-        const upperWick = totalRange > 0 ? (high - Math.max(open, close)) / totalRange : 0;
-        const lowerWick = totalRange > 0 ? (Math.min(open, close) - low) / totalRange : 0;
 
         return {
             symbol,
@@ -157,8 +148,6 @@ async function fetchAnalysis(symbol) {
             rsi1h,
             bb,
             volMultiplier,
-            upperWick,
-            lowerWick,
             high,
             low
         };
@@ -178,7 +167,7 @@ async function scanMarket() {
 
             if (!data || !data.bb) continue;
 
-            const { symbol: sym, currentPrice, rsi1m, rsi1h, bb, volMultiplier, upperWick, lowerWick, high, low } = data;
+            const { symbol: sym, currentPrice, rsi1m, rsi1h, bb, volMultiplier, high, low } = data;
             const lastAlertTime = alertedCoins.get(sym) || 0;
             const now = Date.now();
 
@@ -186,24 +175,18 @@ async function scanMarket() {
 
             let signal = null;
 
-            // KESKİN SHORT KOŞULLARI:
-            // 1m RSI >= 76, Fiyat Bollinger Üst bandını zorluyor, Hacim 1.6x+, Üst fitil var ve 1h RSI aşırı boğa değil (<= 60)
             if (rsi1m >= 76 && currentPrice >= bb.upper * 0.999 && volMultiplier >= 1.6 && rsi1h <= 60) {
-                const sl = (high * 1.002).toFixed(4); // Son tepenin %0.2 üzeri stop
-                const tp = bb.middle.toFixed(4);      // Bollinger ortası kâr al
+                const sl = (high * 1.002).toFixed(4);
+                const tp = bb.middle.toFixed(4);
                 signal = {
                     type: "🔴 SHORT SCALP",
                     sl,
                     tp,
                     reason: `1h RSI (${rsi1h}) uygun, Hacim ${volMultiplier}x, Üst Bant Dışı`
                 };
-            }
-
-            // KESKİN LONG KOŞULLARI:
-            // 1m RSI <= 24, Fiyat Bollinger Alt bandını zorluyor, Hacim 1.6x+, Alt fitil var ve 1h RSI aşırı ayı değil (>= 40)
-            else if (rsi1m <= 24 && currentPrice <= bb.lower * 1.001 && volMultiplier >= 1.6 && rsi1h >= 40) {
-                const sl = (low * 0.998).toFixed(4);  // Son dibin %0.2 altı stop
-                const tp = bb.middle.toFixed(4);      // Bollinger ortası kâr al
+            } else if (rsi1m <= 24 && currentPrice <= bb.lower * 1.001 && volMultiplier >= 1.6 && rsi1h >= 40) {
+                const sl = (low * 0.998).toFixed(4);
+                const tp = bb.middle.toFixed(4);
                 signal = {
                     type: "🟢 LONG SCALP",
                     sl,
@@ -218,7 +201,8 @@ async function scanMarket() {
                 const wallText = wallInfo ? `\n${wallInfo}` : '';
                 const binanceUrl = `https://www.binance.com/tr/futures/${sym}`;
 
-                const msg = `⚡ <b>KESKİN SCALP SİNYALİ</b> ⚡\n\n` +
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                            `⚡ <b>KESKİN SCALP SİNYALİ</b> ⚡\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
                             `🎯 <b>Yön:</b> ${signal.type}\n` +
                             `💵 <b>Giriş Fiyatı:</b> $${currentPrice}\n` +
@@ -227,7 +211,8 @@ async function scanMarket() {
                             `📊 <b>Filtreler:</b>\n` +
                             `• 1dk RSI: ${rsi1m} | 1s RSI: ${rsi1h}\n` +
                             `• Hacim Patlaması: ${signal.reason}${wallText}\n\n` +
-                            `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>`;
+                            `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
+                            `⚠️ <i>"YTD" HEPSİ.</i>`;
 
                 await sendTelegramMessage(msg);
                 alertedCoins.set(sym, now);
@@ -235,10 +220,14 @@ async function scanMarket() {
             }
         }
 
-        if (!signalSentInThisCycle) {
+        const nowTime = Date.now();
+        if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 5 * 60 * 1000)) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
-            const noSignalMsg = `⏳ <b>[${timeNow}]</b> 40 coin tarandı. Çoklu indikatör şartlarını (1s Trend + 1dk BB + Hacim + RSI) sağlayan kusursuz scalp fırsatı bekleniyor...`;
+            const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                                `⏳ <b>[${timeNow}]</b> 40 coin aktif olarak taranıyor. Son 5 dakikada tüm scalp şartlarını sağlayan fırsat oluşmadı, izleme sürüyor...\n\n` +
+                                `⚠️ <i>"YTD" HEPSİ.</i>`;
             await sendTelegramMessage(noSignalMsg);
+            lastStatusReportTime = nowTime;
         }
 
     } catch (err) {
