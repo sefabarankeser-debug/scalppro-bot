@@ -48,9 +48,10 @@ function calculateRSI(klines, period = 14) {
     if (!Array.isArray(klines) || klines.length < period + 1) return 50;
     let gains = 0, losses = 0;
     for (let i = 1; i <= period; i++) {
-        let change = parseFloat(klines[i][4]) - parseFloat(klines[i-1][4]);
-        if (change >= 0) gains += change;
-        else losses += Math.abs(change);
+        let change = parseFloat(klines[i][4]) - parseFloat(klize = parseFloat(klines[i-1][4]));
+        let diff = parseFloat(klines[i][4]) - parseFloat(klines[i-1][4]);
+        if (diff >= 0) gains += diff;
+        else losses += Math.abs(diff);
     }
     let avgGain = gains / period;
     let avgLoss = losses / period;
@@ -120,7 +121,8 @@ async function scanMarket() {
 
         if (!Array.isArray(data)) {
             if (data && data.code === -1003) {
-                console.log("Binance istek sınırı uyarısı alındı, bekleniyor...");
+                console.log("Binance istek sınırı uyarısı alındı, 30 saniye bekleniyor...");
+                await sleep(30000);
             } else {
                 console.error("Binance yanıtı dizi değil:", data);
             }
@@ -129,7 +131,7 @@ async function scanMarket() {
 
         let candidates = data.filter(c => c.symbol && c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
         candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-        candidates = candidates.slice(0, 30); // Taranan coin sayısı 30'a yükseltildi
+        candidates = candidates.slice(0, 30);
 
         let signalSentInThisCycle = false;
 
@@ -138,7 +140,7 @@ async function scanMarket() {
             const cleanSymbol = symbol.replace('USDT', '');
 
             const metrics = await fetchMetrics(symbol);
-            await sleep(1200); // 30 coin için optimize edilmiş güvenli bekleme süresi
+            await sleep(800); // Hızlı ve güvenli istek aralığı
 
             if (!metrics) continue;
 
@@ -173,7 +175,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
-            const noSignalMsg = `⏳ <b>[${timeNow}]</b> Top 30 coin tarandı, bu dakika uygun scalp fırsatı bulunamadı. Tarama devam ediyor...`;
+            const noSignalMsg = `⏳ <b>[${timeNow}]</b> Top 30 coin tarandı, bu turda uygun scalp fırsatı bulunamadı.`;
             await sendTelegramMessage(noSignalMsg);
         }
 
@@ -182,5 +184,13 @@ async function scanMarket() {
     }
 }
 
-setInterval(scanMarket, 60000);
-scanMarket();
+// Üst üste binmeyi önleyen kesintisiz güvenli döngü
+async function runLoop() {
+    while (true) {
+        await scanMarket();
+        // 30 coinin taraması bittikten sonra tam 45 saniye dinlenip Binance kotasını sıfırlıyoruz
+        await sleep(45000);
+    }
+}
+
+runLoop();
