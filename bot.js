@@ -14,16 +14,16 @@ const CHAT_ID = process.env.CHAT_ID || "956236479";
 const alertedCoins = new Map();
 let lastStatusReportTime = 0;
 
-// BTC, ETH, XRP çıkarıldı; en verimli, hızlı tepki veren 40 likit scalp paritesi eklendi
+// TRX, ADA, BNB çıkarıldı; ARKM, CRV, NEIRO eklendi (40 Yüksek Hassasiyetli Scalp Paritesi)
 const TARGET_COINS = [
-    "SOLUSDT", "DOGEUSDT", "BNBUSDT", "SUIUSDT", "PEPEUSDT",
-    "AVAXUSDT", "NEARUSDT", "LINKUSDT", "WIFUSDT", "APTUSDT",
-    "SHIBUSDT", "ADAUSDT", "TAOUSDT", "FETUSDT", "SEIUSDT",
-    "TRXUSDT", "RENDERUSDT", "INJUSDT", "ARBUSDT", "OPUSDT",
-    "TIAUSDT", "KASUSDT", "NOTUSDT", "FLOKIUSDT", "BONKUSDT",
-    "BCHUSDT", "PENDLEUSDT", "GALAUSDT", "STXUSDT", "ORDIUSDT",
-    "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT", "JUPUSDT",
-    "ENAUSDT", "POLUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT"
+    "SOLUSDT", "DOGEUSDT", "SUIUSDT", "PEPEUSDT", "AVAXUSDT",
+    "NEARUSDT", "LINKUSDT", "WIFUSDT", "APTUSDT", "SHIBUSDT",
+    "TAOUSDT", "FETUSDT", "SEIUSDT", "ARKMUSDT", "RENDERUSDT",
+    "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "KASUSDT",
+    "NOTUSDT", "FLOKIUSDT", "BONKUSDT", "BCHUSDT", "PENDLEUSDT",
+    "GALAUSDT", "STXUSDT", "ORDIUSDT", "RUNEUSDT", "AAVEUSDT",
+    "LDOUSDT", "WLDUSDT", "JUPUSDT", "ENAUSDT", "POLUSDT",
+    "ARUSDT", "CFXUSDT", "JTOUSDT", "CRVUSDT", "NEIROUSDT"
 ];
 
 const headers = {
@@ -185,7 +185,7 @@ async function fetchAnalysis(symbol) {
 
 async function scanMarket() {
     try {
-        console.log("Piyasa taranıyor (40 Yüksek Volatiliteli Parite)...", new Date().toLocaleTimeString('tr-TR'));
+        console.log("Piyasa taranıyor (40 Yüksek Verimli Scalp Paritesi)...", new Date().toLocaleTimeString('tr-TR'));
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -259,7 +259,7 @@ async function scanMarket() {
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 5 * 60 * 1000)) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `⏳ <b>[${timeNow}]</b> 40 dinamik parite taranıyor. Son 5 dakikada tüm scalp şartlarını sağlayan fırsat oluşmadı, izleme sürüyor...\n\n` +
+                                `⏳ <b>[${timeNow}]</b> 40 optimize edilmiş parite taranıyor. Son 5 dakikada şartları eksiksiz karşılayan fırsat çıkmadı, izleme sürüyor...\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
             await sendTelegramMessage(noSignalMsg);
             lastStatusReportTime = nowTime;
