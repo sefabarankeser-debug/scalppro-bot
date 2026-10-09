@@ -7,6 +7,8 @@ const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
 };
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function sendTelegramMessage(text) {
     const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     try {
@@ -100,18 +102,24 @@ async function scanMarket() {
         const data = await res.json();
 
         if (!Array.isArray(data)) {
-            console.error("Binance yanıtı dizi değil:", data);
+            if (data && data.code === -1003) {
+                console.log("Binance istek sınırı uyarısı alındı, bekleniyor...");
+            } else {
+                console.error("Binance yanıtı dizi değil:", data);
+            }
             return;
         }
 
         let candidates = data.filter(c => c.symbol && c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
         candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-        candidates = candidates.slice(0, 50);
+        candidates = candidates.slice(0, 40);
 
         for (const coin of candidates) {
             const symbol = coin.symbol;
             const cleanSymbol = symbol.replace('USDT', '');
+
             const metrics = await fetchMetrics(symbol);
+            await sleep(150); // Rate limit engellemek için istekler arasına 150ms gecikme
 
             if (!metrics) continue;
 
@@ -147,5 +155,6 @@ async function scanMarket() {
     }
 }
 
-setInterval(scanMarket, 10000);
+// Her 30 saniyede bir tara
+setInterval(scanMarket, 30000);
 scanMarket();
