@@ -168,4 +168,15 @@ async function scanMarket() {
         // Eğer bu döngüde hiçbir sinyal gönderilmediyse durumu bildir
         if (!signalSentInThisCycle) {
             const timeNow = new Date().toLocaleTimeString('tr-TR');
-            const noSignalMsg = `⏳ *[${timeNow}]* Bu dakika içinde uygun scalp fırsatı (RSI >= 78 veya
+            const noSignalMsg = `⏳ *[${timeNow}]* Bu dakika içinde uygun scalp fırsatı (RSI >= 78 veya <= 22) bulunamadı. Tarama devam ediyor...`;
+            await sendTelegramMessage(noSignalMsg);
+        }
+
+    } catch (err) {
+        console.error("Tarama hatası:", err.message);
+    }
+}
+
+// Her 60 saniyede bir tara
+setInterval(scanMarket, 60000);
+scanMarket();
