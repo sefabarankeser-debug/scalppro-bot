@@ -114,7 +114,7 @@ async function scanMarket() {
 
         if (!Array.isArray(data)) {
             if (data && data.code === -1003) {
-                console.log("Binance istek sınırı uyarısı alındı, 10sn bekleniyor...");
+                console.log("Binance istek sınırı uyarısı alındı, bekleniyor...");
             } else {
                 console.error("Binance yanıtı dizi değil:", data);
             }
@@ -123,14 +123,14 @@ async function scanMarket() {
 
         let candidates = data.filter(c => c.symbol && c.symbol.endsWith('USDT') && parseFloat(c.quoteVolume) >= 5000000);
         candidates.sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume));
-        candidates = candidates.slice(0, 25); // En likit Top 25 coin
+        candidates = candidates.slice(0, 15); // En hacimli ilk 15 coin (Rate limit için sıfır hata)
 
         for (const coin of candidates) {
             const symbol = coin.symbol;
             const cleanSymbol = symbol.replace('USDT', '');
 
             const metrics = await fetchMetrics(symbol);
-            await sleep(350); // 350ms gecikme (Rate limit tam koruma)
+            await sleep(500); // 500ms güvenli gecikme
 
             if (!metrics) continue;
 
