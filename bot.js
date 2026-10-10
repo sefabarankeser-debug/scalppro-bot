@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro 40-Coin Dedicated Engine with Live Tracking Active\n');
+    res.end('ScalpPro Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -50,7 +50,8 @@ const CRITICAL_KEYWORDS = [
 ];
 
 const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json'
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -120,9 +121,7 @@ async function sendTelegramMessage(text) {
         });
         const data = await response.json();
         if (!data.ok) {
-            console.error("🔴 Telegram Gönderim Hatası:", data.description);
-        } else {
-            console.log("🟢 Telegram mesajı kanala iletildi.");
+            console.error("🔴 Telegram Hatası:", data.description);
         }
     } catch (e) {
         console.error("🔴 Telegram Ağ Hatası:", e.message);
@@ -140,7 +139,7 @@ async function checkBreakingNews() {
 
         if (!data || !data.results || !Array.isArray(data.results)) return;
 
-        for (const item of data.results.slice(0, 6)) {
+        for (const item of data.results.slice(0, 5)) {
             const newsId = item.id.toString();
             if (processedNewsIds.has(newsId)) continue;
             processedNewsIds.add(newsId);
@@ -170,30 +169,22 @@ async function checkBreakingNews() {
                 const newsMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                                 `📰 <b>FLAŞ HABER RADARI | #${matchedCoin}</b>\n\n` +
                                 `📢 <b>Başlık:</b> ${title}\n\n` +
-                                `⚠️ <b>Etki:</b> Paritede volatilite ve hacim patlaması bekleniyor. Açık işlemlerde stop mesafelerine dikkat edin!\n\n` +
+                                `⚠️ <b>Etki:</b> Paritede volatilite ve hacim artışı bekleniyor!\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(newsMsg);
-                await sleep(1500);
+                await sleep(1200);
             } else if (isMacroOrBtc) {
-                const isPanic = lowerTitle.includes('dump') || lowerTitle.includes('crash') || lowerTitle.includes('drop') || lowerTitle.includes('fall') || lowerTitle.includes('hack') || lowerTitle.includes('ban');
-                const isPump = lowerTitle.includes('surge') || lowerTitle.includes('pump') || lowerTitle.includes('skyrocket') || lowerTitle.includes('ath') || lowerTitle.includes('approval');
-
-                let directionNote = "Piyasada sert dalgalanma riski yüksek.";
-                if (isPanic) directionNote = "📉 Sert satış (DUMP) riski var!";
-                if (isPump) directionNote = "🚀 Ani yukarı patlama (PUMP) potansiyeli!";
-
                 const macroMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                                  `🚨 <b>PİYASA GENELİ SICAK GELİŞME (BTC / MAKRO)</b>\n\n` +
                                  `📢 <b>Haber:</b> ${title}\n\n` +
-                                 `⚡ <b>Olası Etki:</b> ${directionNote}\n` +
-                                 `🛑 Volatilite durumunda ters işlemler kilitlenecektir.\n\n` +
+                                 `🛑 Dalgalanma durumunda sinyaller kilitlenebilir.\n\n` +
                                  `⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(macroMsg);
-                await sleep(1500);
+                await sleep(1200);
             }
         }
     } catch (e) {
-        console.error("Haber servisi okuma hatası:", e.message);
+        console.error("Haber servisi okunamadı:", e.message);
     }
 }
 
@@ -217,7 +208,6 @@ async function checkSessionAlerts() {
                     `⏳ <b>DİKKAT: EN HAREKETLİ SEANSA 30 DAKİKA KALDI!</b>\n\n` +
                     `🗽 <b>16:30'da ABD (Wall Street) Piyasaları Açılıyor!</b>\n` +
                     `• ETF işlemleri ve küresel fonlar piyasaya girmek üzere.\n` +
-                    `• Önümüzdeki dakikalarda volatilite katlanacak.\n` +
                     `• Botumuz yüksek likidite moduna (Sıkı Filtreler) hazırlanıyor.\n\n` +
                     `⚠️ <i>"YTD" HEPSİ.</i>`;
         await sendTelegramMessage(msg);
@@ -227,10 +217,8 @@ async function checkSessionAlerts() {
     if (trHour === 16 && trMinute >= 30 && trMinute < 40 && !lastNotifiedEvents.openNY) {
         const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                     `🔥 <b>NEW YORK (WALL STREET) SEANSI RESMEN AÇILDI!</b>\n\n` +
-                    `⚡ Günün en yüksek hacimli ve en sert dalgalanma dönemi başladı.\n` +
-                    `• Londra + New York aynı anda devrede (Maksimum Hacim).\n` +
-                    `• Bot filtreleri en katı seviyeye alındı (RSI 27/73 - Hacim 1.4x).\n` +
-                    `• Gelebilecek sinyaller güçlü kırılımlardan süzülecek.\n\n` +
+                    `⚡ Günün en yüksek hacimli ve sert seansı başladı.\n` +
+                    `• Filtreler en katı seviyede (RSI 27/73 - Hacim 1.4x).\n\n` +
                     `⚠️ <i>"YTD" HEPSİ.</i>`;
         await sendTelegramMessage(msg);
         lastNotifiedEvents.openNY = true;
@@ -239,10 +227,8 @@ async function checkSessionAlerts() {
     if (trHour === 23 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.closeNY) {
         const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                     `🌙 <b>NEW YORK SEANSI KAPANDI (PİYASA SAKİNLEŞİYOR)</b>\n\n` +
-                    `💤 ABD borsaları kapandı, günün ana hacim dalgası sona erdi.\n` +
-                    `• Piyasa yavaş yavaş yatay banda ve Asya seansına geçiş yapıyor.\n` +
-                    `• Bot gece hassasiyet moduna hazırlanıyor.\n` +
-                    `• Açık scalp işlemleriniz varsa kâr realizasyonuna dikkat edin.\n\n` +
+                    `💤 ABD borsaları kapandı, ana hacim dalgası sona erdi.\n` +
+                    `• Piyasa yatay banda geçiyor.\n\n` +
                     `⚠️ <i>"YTD" HEPSİ.</i>`;
         await sendTelegramMessage(msg);
         lastNotifiedEvents.closeNY = true;
@@ -266,7 +252,7 @@ function calculateRSI(klines, period = 14) {
             avgGain = (avgGain * 13 + diff) / 14;
             avgLoss = (avgLoss * 13) / 14;
         } else {
-            avgGain = (avgGain * 13 + diff) / 14;
+            avgGain = (avgGain * 13) / 14;
             avgLoss = (avgLoss * 13 + Math.abs(diff)) / 14;
         }
     }
@@ -293,6 +279,7 @@ function calculateBollinger(klines, period = 20, multiplier = 2) {
 async function fetchOrderBookWall(symbol, threshold) {
     try {
         const res = await fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=20`, { headers });
+        if (!res.ok) return null;
         const data = await res.json();
         if (!data || !data.bids || !data.asks) return null;
 
@@ -317,6 +304,7 @@ async function fetchOrderBookWall(symbol, threshold) {
 async function checkBtcCondition() {
     try {
         const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=5`, { headers });
+        if (!res.ok) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
         const klines = await res.json();
         if (!Array.isArray(klines) || klines.length < 4) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
 
@@ -342,13 +330,10 @@ async function checkBtcCondition() {
 
 async function fetchAnalysis(symbol) {
     try {
-        const res1m = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=40`, { headers });
+        const res1m = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=35`, { headers });
+        if (!res1m.ok) return null;
         const klines1m = await res1m.json();
         if (!Array.isArray(klines1m) || klines1m.length < 25) return null;
-
-        const res1h = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=25`, { headers });
-        const klines1h = await res1h.json();
-        if (!Array.isArray(klines1h) || klines1h.length < 15) return null;
 
         const lastCandle = klines1m[klines1m.length - 1];
         const prevCandle = klines1m[klines1m.length - 2];
@@ -358,12 +343,10 @@ async function fetchAnalysis(symbol) {
         const lowPrice = parseFloat(lastCandle[3]);
         const currentPrice = parseFloat(lastCandle[4]);
 
-        const prevOpen = parseFloat(prevCandle[1]);
         const prevHigh = parseFloat(prevCandle[2]);
         const prevLow = parseFloat(prevCandle[3]);
 
-        const rsi1m = calculateRSI(klines1m.slice(-30));
-        const rsi1h = calculateRSI(klines1h);
+        const rsi1m = calculateRSI(klines1m);
         const bb = calculateBollinger(klines1m, 20, 2);
 
         const currentVol = parseFloat(lastCandle[5]);
@@ -377,11 +360,9 @@ async function fetchAnalysis(symbol) {
             openPrice,
             highPrice,
             lowPrice,
-            prevOpen,
             prevHigh,
             prevLow,
             rsi1m,
-            rsi1h,
             bb,
             volMultiplier
         };
@@ -390,7 +371,6 @@ async function fetchAnalysis(symbol) {
     }
 }
 
-// CANLI POZİSYON VE HEDEF/STOP TAKİP RADARI
 async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
     const trade = activeTrades.get(symbol);
     if (!trade) return;
@@ -398,7 +378,6 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
     const cleanSymbol = symbol.replace('USDT', '');
     const nowTime = getTurkishTimeString();
 
-    // 1. LONG POZİSYONUN TAKİBİ
     if (trade.side === 'LONG') {
         if (lowPrice <= trade.sl) {
             const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
@@ -406,7 +385,7 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
                             `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı. Şeffaf istatistik takibi.</i>\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n` +
                             `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(stopMsg);
             activeTrades.delete(symbol);
@@ -436,13 +415,12 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
                            `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🛡️ <b>ÖNEMLİ KURAL:</b> Stop noktanız otomatik olarak <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Artık bu işlemde risk sıfırdır!\n` +
+                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n` +
                            `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(tp1Msg);
         }
     }
 
-    // 2. SHORT POZİSYONUN TAKİBİ
     if (trade.side === 'SHORT') {
         if (highPrice >= trade.sl) {
             const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
@@ -450,7 +428,7 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
                             `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı. Şeffaf istatistik takibi.</i>\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n` +
                             `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(stopMsg);
             activeTrades.delete(symbol);
@@ -480,7 +458,7 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
                            `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🛡️ <b>ÖNEMLİ KURAL:</b> Stop noktanız otomatik olarak <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Artık bu işlemde risk sıfırdır!\n` +
+                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n` +
                            `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(tp1Msg);
         }
@@ -507,23 +485,21 @@ async function scanMarket() {
 
         let signalSentInThisCycle = false;
 
-        // Neden sinyal çıkmadığını ölçümleyen canlı filtre sayaçları
         let lowVolumeCount = 0;
         let neutralRsiCount = 0;
         let noBandTouchCount = 0;
-        let trendConflictCount = 0;
         let scannedCount = 0;
 
         for (const symbol of TARGET_COINS) {
             const data = await fetchAnalysis(symbol);
-            await sleep(650);
+            await sleep(350);
 
             if (!data || !data.bb) continue;
             scannedCount++;
 
             const {
                 symbol: sym, currentPrice, openPrice, highPrice, lowPrice,
-                prevHigh, prevLow, rsi1m, rsi1h, bb, volMultiplier
+                prevHigh, prevLow, rsi1m, bb, volMultiplier
             } = data;
 
             await checkActiveTrades(sym, currentPrice, highPrice, lowPrice);
@@ -538,7 +514,7 @@ async function scanMarket() {
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
-            if (rsi1m >= config.rsiShort && touchedUpper && hasUpperRejection && volMultiplier >= config.minVolMultiplier && rsi1h >= 38 && rsi1h <= 66 && btc.btcTrend !== "PUMP") {
+            if (rsi1m >= config.rsiShort && touchedUpper && hasUpperRejection && volMultiplier >= config.minVolMultiplier && btc.btcTrend !== "PUMP") {
                 const highestPoint = Math.max(highPrice, prevHigh);
                 const sl = highestPoint * 1.0035;
                 const riskDist = sl - currentPrice;
@@ -568,7 +544,7 @@ async function scanMarket() {
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
-            if (rsi1m <= config.rsiLong && touchedLower && hasLowerRejection && volMultiplier >= config.minVolMultiplier && rsi1h <= 62 && rsi1h >= 34 && btc.btcTrend !== "DUMP") {
+            if (rsi1m <= config.rsiLong && touchedLower && hasLowerRejection && volMultiplier >= config.minVolMultiplier && btc.btcTrend !== "DUMP") {
                 const lowestPoint = Math.min(lowPrice, prevLow);
                 const sl = lowestPoint * 0.9965;
                 const riskDist = currentPrice - sl;
@@ -594,7 +570,6 @@ async function scanMarket() {
                 }
             }
 
-            // İstatistik Analizi (Sinyal çıkmadıysa neden elendi?)
             if (!signal) {
                 if (rsi1m > config.rsiLong && rsi1m < config.rsiShort) {
                     neutralRsiCount++;
@@ -602,12 +577,10 @@ async function scanMarket() {
                     noBandTouchCount++;
                 } else if (volMultiplier < config.minVolMultiplier) {
                     lowVolumeCount++;
-                } else {
-                    trendConflictCount++;
                 }
             }
 
-            // Anlık Hacim Dalgası Bilgilendirmesi
+            // Anlık Spike Radarı
             const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
             const isSpike = Math.abs(candleChange) >= 1.0;
             const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
@@ -630,7 +603,7 @@ async function scanMarket() {
                 }
             }
 
-            // Sinyal Gönderimi
+            // Sinyal İletimi
             const lastAlertTime = alertedCoins.get(sym) || 0;
             if (signal && !activeTrades.has(sym) && (now - lastAlertTime >= 15 * 60 * 1000)) {
                 const wallInfo = await fetchOrderBookWall(sym, config.wallThreshold);
@@ -650,7 +623,7 @@ async function scanMarket() {
                             `📊 <b>Filtre Teyitleri:</b>\n` +
                             `• Aktif Seans: ${config.sessionName}\n` +
                             `• BTC 3dk Değişim: %${btc.change3m} (Stabil)\n` +
-                            `• 1dk RSI: ${rsi1m} | 1s RSI: ${rsi1h}\n` +
+                            `• 1dk RSI: ${rsi1m}\n` +
                             `• Onay: ${signal.reason}${wallText}\n\n` +
                             `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
                             `⚠️ <i>"YTD" HEPSİ.</i>`;
@@ -672,20 +645,22 @@ async function scanMarket() {
             }
         }
 
-        // 10 DAKİKADA BİR GELEN GEREKÇELİ DURUM RAPORU
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
             const timeNow = getTurkishTimeString();
+            const totalValid = Math.max(1, scannedCount);
 
             let primaryReason = "";
-            if (neutralRsiCount >= (scannedCount * 0.55)) {
-                primaryReason = `Paritelerin çoğunluğu (%${Math.round((neutralRsiCount / scannedCount) * 100)}) orta RSI bölgesinde (35–65 arası). Tepe veya dip aşırılaşması yok.`;
-            } else if (lowVolumeCount >= (scannedCount * 0.35)) {
-                primaryReason = `Fiyat hareketleri hacimsiz kaldı. Paritelerin %${Math.round((lowVolumeCount / scannedCount) * 100)}'si ${config.minVolMultiplier}x hacim eşiğini geçemedi.`;
-            } else if (noBandTouchCount >= (scannedCount * 0.35)) {
-                primaryReason = `Pariteler Bollinger dış bantlarına temas etmedi, yatay kanalda seyrediyor.`;
+            if (scannedCount === 0) {
+                primaryReason = "Binance veri akışı geçici olarak yanıt vermedi, bağlantı yenileniyor.";
+            } else if (neutralRsiCount >= (totalValid * 0.50)) {
+                const pct = Math.round((neutralRsiCount / totalValid) * 100);
+                primaryReason = `Paritelerin çoğunluğu (%${pct}) orta RSI bölgesinde (35–65 arası). Aşırılaşma oluşmadı.`;
+            } else if (lowVolumeCount >= (totalValid * 0.30)) {
+                const pct = Math.round((lowVolumeCount / totalValid) * 100);
+                primaryReason = `Hacim yetersiz kaldı. Paritelerin %${pct}'si ${config.minVolMultiplier}x eşiğini geçemedi.`;
             } else {
-                primaryReason = `1 saatlik ana trend ile 1 dakikalık scalp yönü uyuşmadığı için risk alınmadı.`;
+                primaryReason = `Pariteler Bollinger bant sınırlarına yaklaşmadı, yatay dalgalanma devam ediyor.`;
             }
 
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
@@ -713,7 +688,7 @@ async function scanMarket() {
 async function runLoop() {
     while (true) {
         await scanMarket();
-        await sleep(25000);
+        await sleep(20000);
     }
 }
 
