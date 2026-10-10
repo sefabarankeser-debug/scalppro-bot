@@ -35,6 +35,7 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
+// Bybit vadeli piyasasında kesin bulunan ve en hacimli 45 parite
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -103,6 +104,7 @@ function getStatsText() {
     return `📊 <b>Canlı Başarı Karnesi:</b>\n${text1}\n${text12}`;
 }
 
+// Dengeli Seans Parametreleri (Akıcı Fırsat Yakalama)
 function getMarketParameters() {
     const now = new Date();
     const trHour = (now.getUTCHours() + 3) % 24;
@@ -110,9 +112,9 @@ function getMarketParameters() {
     if (trHour >= 2 && trHour < 10) {
         return {
             sessionName: "🌏 Asya Seansı",
-            rsiShort: 70,
-            rsiLong: 30,
-            minVolMultiplier: 1.10,
+            rsiShort: 68,
+            rsiLong: 32,
+            minVolMultiplier: 1.05,
             wallThreshold: 180000
         };
     }
@@ -120,19 +122,19 @@ function getMarketParameters() {
     if (trHour >= 10 && trHour < 16) {
         return {
             sessionName: "🇪🇺 Londra Seansı",
-            rsiShort: 72,
-            rsiLong: 28,
-            minVolMultiplier: 1.30,
+            rsiShort: 68,
+            rsiLong: 32,
+            minVolMultiplier: 1.15,
             wallThreshold: 220000
         };
     }
 
     return {
         sessionName: "🗽 New York Seansı",
-        rsiShort: 75,
-        rsiLong: 25,
-        minVolMultiplier: 1.45,
-        wallThreshold: 260000
+        rsiShort: 70,
+        rsiLong: 30,
+        minVolMultiplier: 1.20,
+        wallThreshold: 250000
     };
 }
 
@@ -300,16 +302,6 @@ function calculateBollinger(closes, period = 20, multiplier = 2) {
     };
 }
 
-function calculateEMA(closes, period = 30) {
-    if (!Array.isArray(closes) || closes.length < period) return null;
-    const k = 2 / (period + 1);
-    let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
-    for (let i = period; i < closes.length; i++) {
-        ema = (closes[i] * k) + (ema * (1 - k));
-    }
-    return ema;
-}
-
 async function fetchOrderBookWall(symbol, threshold) {
     try {
         const url = `https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${symbol}&limit=25`;
@@ -391,7 +383,6 @@ async function fetchAnalysis(symbol) {
 
     const rsi1m = calculateRSI(closes, 14);
     const bb = calculateBollinger(closes, 20, 2);
-    const ema30 = calculateEMA(closes, 30);
 
     const currentVol = parseFloat(lastCandle[5]);
     const pastVols = list.slice(-21, -1).map(k => parseFloat(k[5]));
@@ -408,7 +399,6 @@ async function fetchAnalysis(symbol) {
         prevLow,
         rsi1m,
         bb,
-        ema30,
         volMultiplier
     };
 }
@@ -555,7 +545,7 @@ async function scanMarket() {
 
             const {
                 symbol: sym, currentPrice, openPrice, highPrice, lowPrice,
-                prevHigh, prevLow, rsi1m, bb, ema30, volMultiplier
+                prevHigh, prevLow, rsi1m, bb, volMultiplier
             } = data;
 
             await checkActiveTrades(sym, currentPrice);
@@ -566,17 +556,16 @@ async function scanMarket() {
 
             let signal = null;
 
-            // SHORT Kontrolü: Güvenli Stop (%0.95 marj) ve Erken TP1
+            // SHORT Kontrolü: Güvenli Stop (%0.95 marj) ve Hızlı TP1
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
-            const notStrongUpTrend = !ema30 || (currentPrice <= ema30 * 1.008);
 
-            if (rsi1m >= config.rsiShort && touchedUpper && hasUpperRejection && notStrongUpTrend && volMultiplier >= config.minVolMultiplier && btc.btcTrend !== "PUMP") {
+            if (rsi1m >= config.rsiShort && touchedUpper && hasUpperRejection && volMultiplier >= config.minVolMultiplier && btc.btcTrend !== "PUMP") {
                 const highestPoint = Math.max(highPrice, prevHigh);
-                const sl = highestPoint * 1.0095; // %0.95 güvenli stop payı
+                const sl = highestPoint * 1.0095;
                 const riskDist = sl - currentPrice;
 
-                const tp1 = currentPrice - (riskDist * 1.0); // 1.0x hızlı scalp kârı
+                const tp1 = currentPrice - (riskDist * 1.0);
                 const tp2 = Math.min(bb.lower, currentPrice - (riskDist * 2.2));
 
                 const profitPercentTP1 = ((currentPrice - tp1) / currentPrice) * 100;
@@ -597,17 +586,16 @@ async function scanMarket() {
                 }
             }
 
-            // LONG Kontrolü: Güvenli Stop (%0.95 marj) ve Erken TP1
+            // LONG Kontrolü: Güvenli Stop (%0.95 marj) ve Hızlı TP1
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
-            const notStrongDownTrend = !ema30 || (currentPrice >= ema30 * 0.992);
 
-            if (rsi1m <= config.rsiLong && touchedLower && hasLowerRejection && notStrongDownTrend && volMultiplier >= config.minVolMultiplier && btc.btcTrend !== "DUMP") {
+            if (rsi1m <= config.rsiLong && touchedLower && hasLowerRejection && volMultiplier >= config.minVolMultiplier && btc.btcTrend !== "DUMP") {
                 const lowestPoint = Math.min(lowPrice, prevLow);
-                const sl = lowestPoint * 0.9905; // %0.95 güvenli stop payı
+                const sl = lowestPoint * 0.9905;
                 const riskDist = currentPrice - sl;
 
-                const tp1 = currentPrice + (riskDist * 1.0); // 1.0x hızlı scalp kârı
+                const tp1 = currentPrice + (riskDist * 1.0);
                 const tp2 = Math.max(bb.upper, currentPrice + (riskDist * 2.2));
 
                 const profitPercentTP1 = ((tp1 - currentPrice) / currentPrice) * 100;
