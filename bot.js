@@ -49,11 +49,6 @@ const CRITICAL_KEYWORDS = [
     "inflation", "cpi", "hack", "liquidation", "ban", "lawsuit", "court", "war", "tariff"
 ];
 
-const defaultHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept': 'application/json'
-};
-
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function getTurkishTimeString() {
@@ -82,8 +77,7 @@ function getMarketParameters() {
             sessionName: "🌏 Asya Seansı",
             rsiShort: 68,
             rsiLong: 32,
-            minVolMultiplier: 1.05,
-            wallThreshold: 180000
+            minVolMultiplier: 1.05
         };
     }
 
@@ -92,8 +86,7 @@ function getMarketParameters() {
             sessionName: "🇪🇺 Londra Seansı",
             rsiShort: 70,
             rsiLong: 30,
-            minVolMultiplier: 1.25,
-            wallThreshold: 220000
+            minVolMultiplier: 1.25
         };
     }
 
@@ -101,15 +94,33 @@ function getMarketParameters() {
         sessionName: "🗽 New York Seansı",
         rsiShort: 73,
         rsiLong: 27,
-        minVolMultiplier: 1.40,
-        wallThreshold: 260000
+        minVolMultiplier: 1.40
     };
+}
+
+async function safeFetchJson(url) {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json'
+            }
+        });
+        clearTimeout(timeout);
+        if (!res.ok) return null;
+        return await res.json();
+    } catch (e) {
+        return null;
+    }
 }
 
 async function sendTelegramMessage(text) {
     const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     try {
-        const response = await fetch(url, {
+        await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -119,12 +130,8 @@ async function sendTelegramMessage(text) {
                 disable_web_page_preview: true
             })
         });
-        const data = await response.json();
-        if (!data.ok) {
-            console.error("🔴 Telegram Hatası:", data.description);
-        }
     } catch (e) {
-        console.error("🔴 Telegram Ağ Hatası:", e.message);
+        console.error("🔴 Telegram Hatası:", e.message);
     }
 }
 
@@ -134,10 +141,7 @@ async function checkBreakingNews() {
         if (now - lastNewsCheckTime < 2 * 60 * 1000) return;
         lastNewsCheckTime = now;
 
-        const res = await fetch('https://cryptopanic.com/api/free/v1/posts/?public=true', { headers: defaultHeaders });
-        if (!res.ok) return;
-        const data = await res.json();
-
+        const data = await safeFetchJson('https://cryptopanic.com/api/free/v1/posts/?public=true');
         if (!data || !data.results || !Array.isArray(data.results)) return;
 
         for (const item of data.results.slice(0, 5)) {
@@ -173,7 +177,7 @@ async function checkBreakingNews() {
                                 `⚠️ <b>Etki:</b> Paritede volatilite ve hacim artışı bekleniyor!\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(newsMsg);
-                await sleep(1200);
+                await sleep(1000);
             } else if (isMacroOrBtc) {
                 const macroMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                                  `🚨 <b>PİYASA GENELİ SICAK GELİŞME (BTC / MAKRO)</b>\n\n` +
@@ -181,12 +185,10 @@ async function checkBreakingNews() {
                                  `🛑 Dalgalanma durumunda sinyaller kilitlenebilir.\n\n` +
                                  `⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(macroMsg);
-                await sleep(1200);
+                await sleep(1000);
             }
         }
-    } catch (e) {
-        console.error("Haber servisi okunamadı:", e.message);
-    }
+    } catch (e) {}
 }
 
 async function checkSessionAlerts() {
@@ -208,8 +210,7 @@ async function checkSessionAlerts() {
         const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                     `⏳ <b>DİKKAT: EN HAREKETLİ SEANSA 30 DAKİKA KALDI!</b>\n\n` +
                     `🗽 <b>16:30'da ABD (Wall Street) Piyasaları Açılıyor!</b>\n` +
-                    `• ETF işlemleri ve küresel fonlar piyasaya girmek üzere.\n` +
-                    `• Botumuz yüksek likidite moduna hazırlanıyor.\n\n` +
+                    `• ETF işlemleri ve fonlar piyasaya girmek üzere.\n\n` +
                     `⚠️ <i>"YTD" HEPSİ.</i>`;
         await sendTelegramMessage(msg);
         lastNotifiedEvents.approachingNY = true;
@@ -218,8 +219,7 @@ async function checkSessionAlerts() {
     if (trHour === 16 && trMinute >= 30 && trMinute < 40 && !lastNotifiedEvents.openNY) {
         const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                     `🔥 <b>NEW YORK (WALL STREET) SEANSI RESMEN AÇILDI!</b>\n\n` +
-                    `⚡ Günün en yüksek hacimli dönemi devrede.\n` +
-                    `• Filtreler en katı seviyede (RSI 27/73 - Hacim 1.4x).\n\n` +
+                    `⚡ Günün en yüksek hacimli dönemi devrede.\n\n` +
                     `⚠️ <i>"YTD" HEPSİ.</i>`;
         await sendTelegramMessage(msg);
         lastNotifiedEvents.openNY = true;
@@ -259,8 +259,7 @@ function calculateRSI(klines, period = 14) {
     if (avgLoss === 0) return 100;
     if (avgGain === 0) return 0;
     const rs = avgGain / avgLoss;
-    const rsi = Math.round(100 - (100 / (1 + rs)));
-    return Math.max(0, Math.min(100, rsi));
+    return Math.max(0, Math.min(100, Math.round(100 - (100 / (1 + rs)))));
 }
 
 function calculateBollinger(klines, period = 20, multiplier = 2) {
@@ -276,99 +275,87 @@ function calculateBollinger(klines, period = 20, multiplier = 2) {
     };
 }
 
-async function fetchOrderBookWall(symbol, threshold) {
-    try {
-        const res = await fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=20`, { headers: defaultHeaders });
-        if (!res.ok) return null;
-        const data = await res.json();
-        if (!data || !data.bids || !data.asks) return null;
+// Render IP bloğunu aşmak için çoklu yedekli Kline veri çekici
+async function fetchKlines(symbol) {
+    const endpoints = [
+        `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=35`,
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=35`,
+        `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=1m&limit=35`
+    ];
 
-        let maxAskWall = 0, maxBidWall = 0;
-        data.asks.forEach(a => {
-            const val = parseFloat(a[0]) * parseFloat(a[1]);
-            if (val > maxAskWall) maxAskWall = val;
-        });
-        data.bids.forEach(b => {
-            const val = parseFloat(b[0]) * parseFloat(b[1]);
-            if (val > maxBidWall) maxBidWall = val;
-        });
-
-        if (maxAskWall >= threshold) return `🧱 $${(maxAskWall / 1000).toFixed(0)}K Satış Duvarı`;
-        if (maxBidWall >= threshold) return `🧱 $${(maxBidWall / 1000).toFixed(0)}K Alış Duvarı`;
-        return null;
-    } catch (e) {
-        return null;
+    for (const url of endpoints) {
+        const data = await safeFetchJson(url);
+        if (Array.isArray(data) && data.length >= 22) {
+            return data;
+        }
     }
+    return null;
 }
 
 async function checkBtcCondition() {
-    try {
-        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=5`, { headers: defaultHeaders });
-        if (!res.ok) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
-        const klines = await res.json();
-        if (!Array.isArray(klines) || klines.length < 4) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
+    const klines = await fetchKlines("BTCUSDT");
+    if (!klines || klines.length < 4) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
 
-        const currentPrice = parseFloat(klines[klines.length - 1][4]);
-        const price3mAgo = parseFloat(klines[klines.length - 4][1]);
-        const change3m = ((currentPrice - price3mAgo) / price3mAgo) * 100;
+    const currentPrice = parseFloat(klines[klines.length - 1][4]);
+    const price3mAgo = parseFloat(klines[klines.length - 4][1]);
+    const change3m = ((currentPrice - price3mAgo) / price3mAgo) * 100;
 
-        const isVolatile = Math.abs(change3m) >= 0.48;
-        let btcTrend = "NEUTRAL";
-        if (change3m <= -0.25) btcTrend = "DUMP";
-        else if (change3m >= 0.25) btcTrend = "PUMP";
+    const isVolatile = Math.abs(change3m) >= 0.48;
+    let btcTrend = "NEUTRAL";
+    if (change3m <= -0.25) btcTrend = "DUMP";
+    else if (change3m >= 0.25) btcTrend = "PUMP";
 
-        return {
-            safe: !isVolatile,
-            btcTrend,
-            change3m: change3m.toFixed(2),
-            currentBtcPrice: currentPrice
-        };
-    } catch (e) {
-        return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
-    }
+    return {
+        safe: !isVolatile,
+        btcTrend,
+        change3m: change3m.toFixed(2),
+        currentBtcPrice: currentPrice
+    };
 }
 
 async function fetchAnalysis(symbol) {
-    try {
-        const res1m = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=50`, { headers: defaultHeaders });
-        if (!res1m.ok) return null;
-        const klines1m = await res1m.json();
-        if (!Array.isArray(klines1m) || klines1m.length < 25) return null;
+    // 1000'li semboller Binance Spot'ta normal isimle geçer (Fallback uyumluluğu için)
+    let spotAlternative = symbol;
+    if (symbol.startsWith("1000")) spotAlternative = symbol.replace("1000", "");
 
-        const lastCandle = klines1m[klines1m.length - 1];
-        const prevCandle = klines1m[klines1m.length - 2];
-
-        const openPrice = parseFloat(lastCandle[1]);
-        const highPrice = parseFloat(lastCandle[2]);
-        const lowPrice = parseFloat(lastCandle[3]);
-        const currentPrice = parseFloat(lastCandle[4]);
-
-        const prevHigh = parseFloat(prevCandle[2]);
-        const prevLow = parseFloat(prevCandle[3]);
-
-        const rsi1m = calculateRSI(klines1m);
-        const bb = calculateBollinger(klines1m, 20, 2);
-
-        const currentVol = parseFloat(lastCandle[5]);
-        const pastVols = klines1m.slice(-21, -1).map(k => parseFloat(k[5]));
-        const avgVol = pastVols.length > 0 ? (pastVols.reduce((a, b) => a + b, 0) / pastVols.length) : 1;
-        const volMultiplier = avgVol > 0 ? (currentVol / avgVol).toFixed(1) : 1;
-
-        return {
-            symbol,
-            currentPrice,
-            openPrice,
-            highPrice,
-            lowPrice,
-            prevHigh,
-            prevLow,
-            rsi1m,
-            bb,
-            volMultiplier
-        };
-    } catch (e) {
-        return null;
+    let klines1m = await fetchKlines(symbol);
+    if (!klines1m && spotAlternative !== symbol) {
+        klines1m = await fetchKlines(spotAlternative);
     }
+
+    if (!klines1m) return null;
+
+    const lastCandle = klines1m[klines1m.length - 1];
+    const prevCandle = klines1m[klines1m.length - 2];
+
+    const openPrice = parseFloat(lastCandle[1]);
+    const highPrice = parseFloat(lastCandle[2]);
+    const lowPrice = parseFloat(lastCandle[3]);
+    const currentPrice = parseFloat(lastCandle[4]);
+
+    const prevHigh = parseFloat(prevCandle[2]);
+    const prevLow = parseFloat(prevCandle[3]);
+
+    const rsi1m = calculateRSI(klines1m);
+    const bb = calculateBollinger(klines1m, 20, 2);
+
+    const currentVol = parseFloat(lastCandle[5]);
+    const pastVols = klines1m.slice(-21, -1).map(k => parseFloat(k[5]));
+    const avgVol = pastVols.length > 0 ? (pastVols.reduce((a, b) => a + b, 0) / pastVols.length) : 1;
+    const volMultiplier = avgVol > 0 ? (currentVol / avgVol).toFixed(1) : 1;
+
+    return {
+        symbol,
+        currentPrice,
+        openPrice,
+        highPrice,
+        lowPrice,
+        prevHigh,
+        prevLow,
+        rsi1m,
+        bb,
+        volMultiplier
+    };
 }
 
 async function checkActiveTrades(symbol, currentPrice) {
@@ -492,7 +479,7 @@ async function scanMarket() {
 
         for (const symbol of TARGET_COINS) {
             const data = await fetchAnalysis(symbol);
-            await sleep(250);
+            await sleep(200);
 
             if (!data || !data.bb) continue;
             scannedCount++;
@@ -510,7 +497,7 @@ async function scanMarket() {
 
             let signal = null;
 
-            // SHORT Kontrolü
+            // SHORT
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
@@ -540,7 +527,7 @@ async function scanMarket() {
                 }
             }
 
-            // LONG Kontrolü
+            // LONG
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
@@ -594,7 +581,7 @@ async function scanMarket() {
                                     `<b>Change:</b> ${changeIcon} %${candleChange.toFixed(2)}\n` +
                                     `<b>Last Price:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
                                     `<b>Previous Price:</b> $${formatPrice(openPrice, currentPrice)}\n\n` +
-                                    `ℹ️ <i>Not: Strateji dönüş teyitleri oluşmadı. Sadece bilgilendirme amaçlıdır, işleme girmeyiniz.</i>\n\n` +
+                                    `ℹ️ <i>Not: Strateji dönüş teyitleri oluşmadı. Sadece bilgilendirme amaçlıdır.</i>\n\n` +
                                     `🔗 <a href="${binanceUrl}">Binance</a> | <a href="https://www.tradingview.com/symbols/${sym}">TV</a>\n` +
                                     `⏱ <b>${getTurkishTimeString()} (TSİ)</b>`;
 
@@ -606,9 +593,6 @@ async function scanMarket() {
             // Sinyal İletimi
             const lastAlertTime = alertedCoins.get(sym) || 0;
             if (signal && !activeTrades.has(sym) && (now - lastAlertTime >= 15 * 60 * 1000)) {
-                const wallInfo = await fetchOrderBookWall(sym, config.wallThreshold);
-                const wallText = wallInfo ? `\n${wallInfo}` : '';
-
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                             `⚡ <b>KÜRESEL SEANS SCALP SİNYALİ</b> ⚡\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
@@ -624,7 +608,7 @@ async function scanMarket() {
                             `• Aktif Seans: ${config.sessionName}\n` +
                             `• BTC 3dk Değişim: %${btc.change3m} (Stabil)\n` +
                             `• 1dk RSI: ${rsi1m}\n` +
-                            `• Onay: ${signal.reason}${wallText}\n\n` +
+                            `• Onay: ${signal.reason}\n\n` +
                             `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
                             `⚠️ <i>"YTD" HEPSİ.</i>`;
 
@@ -645,7 +629,7 @@ async function scanMarket() {
             }
         }
 
-        // 10 Dakikalık Durum Raporu
+        // 10 Dakikalık Şeffaf Durum Raporu
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
             const timeNow = getTurkishTimeString();
@@ -653,15 +637,15 @@ async function scanMarket() {
 
             let primaryReason = "";
             if (scannedCount === 0) {
-                primaryReason = "Binance veri akışı geçici olarak yanıt vermedi, bir sonraki döngüde tekrar deneniyor.";
+                primaryReason = "Binance bağlantısı yenileniyor, bir sonraki döngüde güncellenecek.";
             } else if (neutralRsiCount >= (totalValid * 0.40)) {
                 const pct = Math.round((neutralRsiCount / totalValid) * 100);
-                primaryReason = `Paritelerin çoğunluğu (%${pct}) orta RSI bölgesinde (35–65 arası). Aşırılaşma oluşmadı.`;
+                primaryReason = `Paritelerin çoğunluğu (%${pct}) orta RSI bölgesinde (35–65 arası). Aşırılaşma yok.`;
             } else if (lowVolumeCount >= (totalValid * 0.30)) {
                 const pct = Math.round((lowVolumeCount / totalValid) * 100);
                 primaryReason = `Hacim yetersiz kaldı. Paritelerin %${pct}'si ${config.minVolMultiplier}x eşiğini geçemedi.`;
             } else {
-                primaryReason = `Pariteler Bollinger bant sınırlarına yaklaşmadı, yatay dalgalanma devam ediyor.`;
+                primaryReason = `Pariteler Bollinger bant sınırlarına yaklaşmadı, yatay dalgalanma sürüyor.`;
             }
 
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
@@ -689,7 +673,7 @@ async function scanMarket() {
 async function runLoop() {
     while (true) {
         await scanMarket();
-        await sleep(20000);
+        await sleep(15000);
     }
 }
 
