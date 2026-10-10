@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro Engine Active\n');
+    res.end('ScalpPro 40-Coin Dedicated Engine with Live Tracking Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -265,7 +265,7 @@ function calculateRSI(klines, period = 14) {
 }
 
 function calculateBollinger(klines, period = 20, multiplier = 2) {
-    if (klines.length < period) return null;
+    if (!Array.isArray(klines) || klines.length < period) return null;
     const slice = klines.slice(-period).map(k => parseFloat(k[4]));
     const mean = slice.reduce((a, b) => a + b, 0) / period;
     const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
@@ -331,10 +331,10 @@ async function checkBtcCondition() {
 
 async function fetchAnalysis(symbol) {
     try {
-        const res1m = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=30`, { headers: defaultHeaders });
+        const res1m = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=50`, { headers: defaultHeaders });
         if (!res1m.ok) return null;
         const klines1m = await res1m.json();
-        if (!Array.isArray(klines1m) || klines1m.length < 22) return null;
+        if (!Array.isArray(klines1m) || klines1m.length < 25) return null;
 
         const lastCandle = klines1m[klines1m.length - 1];
         const prevCandle = klines1m[klines1m.length - 2];
@@ -511,7 +511,7 @@ async function scanMarket() {
 
             let signal = null;
 
-            // SHORT
+            // SHORT Kontrolü
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
@@ -541,7 +541,7 @@ async function scanMarket() {
                 }
             }
 
-            // LONG
+            // LONG Kontrolü
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
@@ -654,7 +654,7 @@ async function scanMarket() {
 
             let primaryReason = "";
             if (scannedCount === 0) {
-                primaryReason = "Binance veri akışı geçici olarak yanıt vermedi, bağlantı yenileniyor.";
+                primaryReason = "Binance veri akışı geçici olarak yanıt vermedi, bir sonraki döngüde tekrar deneniyor.";
             } else if (neutralRsiCount >= (totalValid * 0.40)) {
                 const pct = Math.round((neutralRsiCount / totalValid) * 100);
                 primaryReason = `Paritelerin çoğunluğu (%${pct}) orta RSI bölgesinde (35–65 arası). Aşırılaşma oluşmadı.`;
