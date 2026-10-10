@@ -49,8 +49,8 @@ const CRITICAL_KEYWORDS = [
     "inflation", "cpi", "hack", "liquidation", "ban", "lawsuit", "court", "war", "tariff"
 ];
 
-const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+const defaultHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Accept': 'application/json'
 };
 
@@ -134,7 +134,8 @@ async function checkBreakingNews() {
         if (now - lastNewsCheckTime < 2 * 60 * 1000) return;
         lastNewsCheckTime = now;
 
-        const res = await fetch('https://cryptopanic.com/api/free/v1/posts/?public=true', { headers });
+        const res = await fetch('https://cryptopanic.com/api/free/v1/posts/?public=true', { headers: defaultHeaders });
+        if (!res.ok) return;
         const data = await res.json();
 
         if (!data || !data.results || !Array.isArray(data.results)) return;
@@ -252,7 +253,7 @@ function calculateRSI(klines, period = 14) {
             avgGain = (avgGain * 13 + diff) / 14;
             avgLoss = (avgLoss * 13) / 14;
         } else {
-            avgGain = (avgGain * 13) / 14;
+            avgGain = (avgGain * 13 + diff) / 14;
             avgLoss = (avgLoss * 13 + Math.abs(diff)) / 14;
         }
     }
@@ -278,7 +279,7 @@ function calculateBollinger(klines, period = 20, multiplier = 2) {
 
 async function fetchOrderBookWall(symbol, threshold) {
     try {
-        const res = await fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=20`, { headers });
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=20`, { headers: defaultHeaders });
         if (!res.ok) return null;
         const data = await res.json();
         if (!data || !data.bids || !data.asks) return null;
@@ -303,7 +304,7 @@ async function fetchOrderBookWall(symbol, threshold) {
 
 async function checkBtcCondition() {
     try {
-        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=5`, { headers });
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=5`, { headers: defaultHeaders });
         if (!res.ok) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
         const klines = await res.json();
         if (!Array.isArray(klines) || klines.length < 4) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
@@ -330,10 +331,10 @@ async function checkBtcCondition() {
 
 async function fetchAnalysis(symbol) {
     try {
-        const res1m = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=35`, { headers });
+        const res1m = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=30`, { headers: defaultHeaders });
         if (!res1m.ok) return null;
         const klines1m = await res1m.json();
-        if (!Array.isArray(klines1m) || klines1m.length < 25) return null;
+        if (!Array.isArray(klines1m) || klines1m.length < 22) return null;
 
         const lastCandle = klines1m[klines1m.length - 1];
         const prevCandle = klines1m[klines1m.length - 2];
@@ -351,7 +352,7 @@ async function fetchAnalysis(symbol) {
 
         const currentVol = parseFloat(lastCandle[5]);
         const pastVols = klines1m.slice(-21, -1).map(k => parseFloat(k[5]));
-        const avgVol = pastVols.reduce((a, b) => a + b, 0) / pastVols.length;
+        const avgVol = pastVols.length > 0 ? (pastVols.reduce((a, b) => a + b, 0) / pastVols.length) : 1;
         const volMultiplier = avgVol > 0 ? (currentVol / avgVol).toFixed(1) : 1;
 
         return {
@@ -379,17 +380,18 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
     const nowTime = getTurkishTimeString();
 
     if (trade.side === 'LONG') {
-        if (lowPrice <= trade.sl) {
-            const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
-            const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
-                            `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
-                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                            `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n` +
-                            `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(stopMsg);
-            activeTrades.delete(symbol);
-            return;
+        if (!trade.tp1Hit && highPrice >= trade.tp1) {
+            trade.tp1Hit = true;
+            trade.sl = trade.entry;
+            const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
+            const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
+                           `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
+                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                           `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
+                           `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
+                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n` +
+                           `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(tp1Msg);
         }
 
         if (highPrice >= trade.tp2) {
@@ -406,26 +408,10 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
             return;
         }
 
-        if (!trade.tp1Hit && highPrice >= trade.tp1) {
-            trade.tp1Hit = true;
-            trade.sl = trade.entry;
-            const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
-            const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
-                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                           `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
-                           `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n` +
-                           `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(tp1Msg);
-        }
-    }
-
-    if (trade.side === 'SHORT') {
-        if (highPrice >= trade.sl) {
-            const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
+        if (lowPrice <= trade.sl) {
+            const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
             const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
-                            `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
+                            `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
                             `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n` +
@@ -433,6 +419,22 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
             await sendTelegramMessage(stopMsg);
             activeTrades.delete(symbol);
             return;
+        }
+    }
+
+    if (trade.side === 'SHORT') {
+        if (!trade.tp1Hit && lowPrice <= trade.tp1) {
+            trade.tp1Hit = true;
+            trade.sl = trade.entry;
+            const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
+            const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
+                           `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
+                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                           `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
+                           `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
+                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n` +
+                           `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(tp1Msg);
         }
 
         if (lowPrice <= trade.tp2) {
@@ -449,18 +451,17 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
             return;
         }
 
-        if (!trade.tp1Hit && lowPrice <= trade.tp1) {
-            trade.tp1Hit = true;
-            trade.sl = trade.entry;
-            const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
-            const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
-                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                           `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
-                           `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n` +
-                           `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(tp1Msg);
+        if (highPrice >= trade.sl) {
+            const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
+            const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
+                            `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
+                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                            `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n` +
+                            `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(stopMsg);
+            activeTrades.delete(symbol);
+            return;
         }
     }
 
@@ -492,7 +493,7 @@ async function scanMarket() {
 
         for (const symbol of TARGET_COINS) {
             const data = await fetchAnalysis(symbol);
-            await sleep(350);
+            await sleep(250);
 
             if (!data || !data.bb) continue;
             scannedCount++;
@@ -510,7 +511,7 @@ async function scanMarket() {
 
             let signal = null;
 
-            // SHORT Kontrolü
+            // SHORT
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
@@ -540,7 +541,7 @@ async function scanMarket() {
                 }
             }
 
-            // LONG Kontrolü
+            // LONG
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
@@ -580,7 +581,7 @@ async function scanMarket() {
                 }
             }
 
-            // Anlık Spike Radarı
+            // Spike Radarı
             const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
             const isSpike = Math.abs(candleChange) >= 1.0;
             const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
@@ -645,6 +646,7 @@ async function scanMarket() {
             }
         }
 
+        // 10 Dakikalık Şeffaf Durum Raporu
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
             const timeNow = getTurkishTimeString();
@@ -653,7 +655,7 @@ async function scanMarket() {
             let primaryReason = "";
             if (scannedCount === 0) {
                 primaryReason = "Binance veri akışı geçici olarak yanıt vermedi, bağlantı yenileniyor.";
-            } else if (neutralRsiCount >= (totalValid * 0.50)) {
+            } else if (neutralRsiCount >= (totalValid * 0.40)) {
                 const pct = Math.round((neutralRsiCount / totalValid) * 100);
                 primaryReason = `Paritelerin çoğunluğu (%${pct}) orta RSI bölgesinde (35–65 arası). Aşırılaşma oluşmadı.`;
             } else if (lowVolumeCount >= (totalValid * 0.30)) {
