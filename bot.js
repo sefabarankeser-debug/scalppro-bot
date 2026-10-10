@@ -53,6 +53,11 @@ const headers = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Türkiye saatini kesin olarak veren formatlayıcı
+function getTurkishTimeString() {
+    return new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul' });
+}
+
 function formatPrice(val, basePrice) {
     if (!val || isNaN(val)) return "0.00";
     const ref = basePrice || val;
@@ -68,6 +73,7 @@ function formatPrice(val, basePrice) {
 
 function getMarketParameters() {
     const now = new Date();
+    // TSİ (UTC+3)
     const trHour = (now.getUTCHours() + 3) % 24;
 
     if (trHour >= 2 && trHour < 10) {
@@ -385,7 +391,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const config = getMarketParameters();
-        console.log(`Piyasa taranıyor [${config.sessionName}]...`, new Date().toLocaleTimeString('tr-TR'));
+        console.log(`Piyasa taranıyor [${config.sessionName}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -413,7 +419,7 @@ async function scanMarket() {
 
             let signal = null;
 
-            // SHORT: 1s RSI en az 38 olmalı (aşırı dipte short açılmaz)
+            // SHORT Kontrolü
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
@@ -439,7 +445,7 @@ async function scanMarket() {
                 }
             }
 
-            // LONG: 1s RSI en fazla 62 olmalı (aşırı şişmiş coinde long açılmaz)
+            // LONG Kontrolü
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
@@ -476,10 +482,12 @@ async function scanMarket() {
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
                             `🎯 <b>Yön:</b> ${signal.type}\n` +
                             `💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
-                            `🛑 <b>Önerilen Stop:</b> $${signal.sl}\n\n` +
+                            `🛑 <b>Önerilen Stop:</b> $${signal.sl}\n` +
+                            `⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x Cross/İzole\n\n` +
                             `🎯 <b>Kademeli Kâr Hedefleri:</b>\n` +
                             `• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n` +
-                            `• <b>TP2 (Ana Hedef / Trend):</b> $${signal.tp2}\n\n` +
+                            `• <b>TP2 (Ana Hedef / Trend):</b> $${signal.tp2}\n` +
+                            `<i>💡 TP1 alınınca Stop noktanızı Giriş Seviyesine taşıyınız.</i>\n\n` +
                             `📊 <b>Filtre Teyitleri:</b>\n` +
                             `• Aktif Seans: ${config.sessionName}\n` +
                             `• BTC 3dk Değişim: %${btc.change3m} (Stabil)\n` +
@@ -496,7 +504,7 @@ async function scanMarket() {
 
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
-            const timeNow = new Date().toLocaleTimeString('tr-TR');
+            const timeNow = getTurkishTimeString();
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                                 `⏳ <b>[${timeNow}]</b> 40 parite taranıyor. (${config.sessionName} modunda şartları karşılayan fırsat aranıyor, izleme sürüyor...)\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
