@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro 45-Coin Dedicated Engine Active\n');
+    res.end('ScalpPro 45-Coin Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -23,7 +23,7 @@ const alertedCoins = new Map();
 const spikeAlertedCoins = new Map();
 const activeTrades = new Map();
 const processedNewsIds = new Set();
-const tradeHistory = []; // Son 12 saatin TP/Stop geçmişi
+const tradeHistory = []; // İşlem geçmişi
 
 let lastStatusReportTime = 0;
 let lastNewsCheckTime = 0;
@@ -35,7 +35,7 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
-// 45 Adet Yüksek Likiditeli Futures Paritesi
+// Bybit vadeli piyasasında kesin bulunan ve en hacimli 45 parite
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -45,7 +45,7 @@ const TARGET_COINS = [
     "ORDIUSDT", "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT",
     "JUPUSDT", "ENAUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT",
     "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT",
-    "LINKUSDT", "FTMUSDT", "KASUSDT", "POPCATUSDT", "BLURUSDT"
+    "LINKUSDT", "FTMUSDT", "SANDUSDT", "MANAUSDT", "THETAUSDT"
 ];
 
 const CRITICAL_KEYWORDS = [
@@ -72,16 +72,13 @@ function formatPrice(val, basePrice) {
     return Number(val).toFixed(decimals);
 }
 
-function get12hStats() {
-    const now = Date.now();
-    const twelveHoursAgo = now - (12 * 60 * 60 * 1000);
+// 1 Saatlik ve 12 Saatlik Win Rate Hesaplayıcı
+function getPeriodStats(hours) {
+    const cutoff = Date.now() - (hours * 60 * 60 * 1000);
+    const filtered = tradeHistory.filter(t => t.time >= cutoff);
 
-    while (tradeHistory.length > 0 && tradeHistory[0].time < twelveHoursAgo) {
-        tradeHistory.shift();
-    }
-
-    const tps = tradeHistory.filter(t => t.type === 'TP').length;
-    const stops = tradeHistory.filter(t => t.type === 'STOP').length;
+    const tps = filtered.filter(t => t.type === 'TP').length;
+    const stops = filtered.filter(t => t.type === 'STOP').length;
     const total = tps + stops;
     const winRate = total > 0 ? ((tps / total) * 100).toFixed(1) : "0.0";
 
@@ -89,13 +86,24 @@ function get12hStats() {
 }
 
 function getStatsText() {
-    const stats = get12hStats();
-    if (stats.total === 0) {
-        return `📊 <b>Son 12 Saatlik Karne:</b> Henüz tamamlanan işlem bulunmuyor.`;
+    // 12 saatten eski verileri temizle
+    const twelveHoursAgo = Date.now() - (12 * 60 * 60 * 1000);
+    while (tradeHistory.length > 0 && tradeHistory[0].time < twelveHoursAgo) {
+        tradeHistory.shift();
     }
-    return `📊 <b>Son 12 Saatlik Karne:</b>\n` +
-           `• ✅ Başarılı: <b>${stats.tps} TP</b> | ❌ Kayıp: <b>${stats.stops} Stop</b>\n` +
-           `• 🎯 Win Rate: <b>%${stats.winRate}</b> (Toplam ${stats.total} İşlem)`;
+
+    const s1 = getPeriodStats(1);
+    const s12 = getPeriodStats(12);
+
+    let text1 = s1.total > 0
+        ? `• ⚡ <b>Son 1 Saat:</b> ${s1.tps} TP | ${s1.stops} Stop (<b>%${s1.winRate} Win Rate</b>)`
+        : `• ⚡ <b>Son 1 Saat:</b> İşlem yok`;
+
+    let text12 = s12.total > 0
+        ? `• 🌐 <b>Son 12 Saat:</b> ${s12.tps} TP | ${s12.stops} Stop (<b>%${s12.winRate} Win Rate</b>)`
+        : `• 🌐 <b>Son 12 Saat:</b> Henüz sonuçlanan işlem yok`;
+
+    return `📊 <b>Canlı Başarı Karnesi:</b>\n${text1}\n${text12}`;
 }
 
 function getMarketParameters() {
@@ -684,7 +692,7 @@ async function scanMarket() {
             }
         }
 
-        // 10 Dakikalık Şeffaf Durum Raporu
+        // 10 Dakikalık Rapor
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
             const timeNow = getTurkishTimeString();
