@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro 40-Coin Engine Active\n');
+    res.end('ScalpPro Universal Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -33,6 +33,7 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
+// Bybit Futures formatında 40 coin listesi (1000'li olanlar Bybit standart sembollerine göre ayarlandı)
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -98,25 +99,6 @@ function getMarketParameters() {
     };
 }
 
-async function safeFetchJson(url) {
-    try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 6000);
-        const res = await fetch(url, {
-            signal: controller.signal,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json'
-            }
-        });
-        clearTimeout(timeout);
-        if (!res.ok) return null;
-        return await res.json();
-    } catch (e) {
-        return null;
-    }
-}
-
 async function sendTelegramMessage(text) {
     const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     try {
@@ -141,7 +123,9 @@ async function checkBreakingNews() {
         if (now - lastNewsCheckTime < 2 * 60 * 1000) return;
         lastNewsCheckTime = now;
 
-        const data = await safeFetchJson('https://cryptopanic.com/api/free/v1/posts/?public=true');
+        const res = await fetch('https://cryptopanic.com/api/free/v1/posts/?public=true');
+        if (!res.ok) return;
+        const data = await res.json();
         if (!data || !data.results || !Array.isArray(data.results)) return;
 
         for (const item of data.results.slice(0, 5)) {
@@ -235,19 +219,19 @@ async function checkSessionAlerts() {
     }
 }
 
-function calculateRSI(klines, period = 14) {
-    if (!Array.isArray(klines) || klines.length < period + 1) return 50;
+function calculateRSI(closes, period = 14) {
+    if (!Array.isArray(closes) || closes.length < period + 1) return 50;
     let gains = 0, losses = 0;
     for (let i = 1; i <= period; i++) {
-        let diff = parseFloat(klines[i][4]) - parseFloat(klines[i - 1][4]);
+        let diff = closes[i] - closes[i - 1];
         if (diff >= 0) gains += diff;
         else losses += Math.abs(diff);
     }
     let avgGain = gains / period;
     let avgLoss = losses / period;
 
-    for (let i = period + 1; i < klines.length; i++) {
-        let diff = parseFloat(klines[i][4]) - parseFloat(klines[i - 1][4]);
+    for (let i = period + 1; i < closes.length; i++) {
+        let diff = closes[i] - closes[i - 1];
         if (diff >= 0) {
             avgGain = (avgGain * 13 + diff) / 14;
             avgLoss = (avgLoss * 13) / 14;
@@ -262,9 +246,9 @@ function calculateRSI(klines, period = 14) {
     return Math.max(0, Math.min(100, Math.round(100 - (100 / (1 + rs)))));
 }
 
-function calculateBollinger(klines, period = 20, multiplier = 2) {
-    if (!Array.isArray(klines) || klines.length < period) return null;
-    const slice = klines.slice(-period).map(k => parseFloat(k[4]));
+function calculateBollinger(closes, period = 20, multiplier = 2) {
+    if (!Array.isArray(closes) || closes.length < period) return null;
+    const slice = closes.slice(-period);
     const mean = slice.reduce((a, b) => a + b, 0) / period;
     const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
     const stdDev = Math.sqrt(variance);
@@ -275,29 +259,27 @@ function calculateBollinger(klines, period = 20, multiplier = 2) {
     };
 }
 
-// Render IP bloğunu aşmak için çoklu yedekli Kline veri çekici
-async function fetchKlines(symbol) {
-    const endpoints = [
-        `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1m&limit=35`,
-        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&limit=35`,
-        `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=1m&limit=35`
-    ];
-
-    for (const url of endpoints) {
-        const data = await safeFetchJson(url);
-        if (Array.isArray(data) && data.length >= 22) {
-            return data;
-        }
+// Render IP'sini asla engellemeyen Bybit Açık API Motoru
+async function fetchBybitKlines(symbol) {
+    try {
+        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=1&limit=35`;
+        const res = await fetch(url, { headers: { 'User-Agent': 'ScalpProBot/2.0' } });
+        if (!res.ok) return null;
+        const json = await res.json();
+        if (json.retCode !== 0 || !json.result || !json.result.list || json.result.list.length < 22) return null;
+        // Bybit verileri en yeniden en eskiye verir; kronolojik sıraya çeviriyoruz
+        return json.result.list.reverse();
+    } catch (e) {
+        return null;
     }
-    return null;
 }
 
 async function checkBtcCondition() {
-    const klines = await fetchKlines("BTCUSDT");
-    if (!klines || klines.length < 4) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
+    const list = await fetchBybitKlines("BTCUSDT");
+    if (!list || list.length < 4) return { safe: true, btcTrend: "NEUTRAL", change3m: "0.00" };
 
-    const currentPrice = parseFloat(klines[klines.length - 1][4]);
-    const price3mAgo = parseFloat(klines[klines.length - 4][1]);
+    const currentPrice = parseFloat(list[list.length - 1][4]);
+    const price3mAgo = parseFloat(list[list.length - 4][1]);
     const change3m = ((currentPrice - price3mAgo) / price3mAgo) * 100;
 
     const isVolatile = Math.abs(change3m) >= 0.48;
@@ -314,19 +296,12 @@ async function checkBtcCondition() {
 }
 
 async function fetchAnalysis(symbol) {
-    // 1000'li semboller Binance Spot'ta normal isimle geçer (Fallback uyumluluğu için)
-    let spotAlternative = symbol;
-    if (symbol.startsWith("1000")) spotAlternative = symbol.replace("1000", "");
+    const list = await fetchBybitKlines(symbol);
+    if (!list) return null;
 
-    let klines1m = await fetchKlines(symbol);
-    if (!klines1m && spotAlternative !== symbol) {
-        klines1m = await fetchKlines(spotAlternative);
-    }
-
-    if (!klines1m) return null;
-
-    const lastCandle = klines1m[klines1m.length - 1];
-    const prevCandle = klines1m[klines1m.length - 2];
+    const closes = list.map(k => parseFloat(k[4]));
+    const lastCandle = list[list.length - 1];
+    const prevCandle = list[list.length - 2];
 
     const openPrice = parseFloat(lastCandle[1]);
     const highPrice = parseFloat(lastCandle[2]);
@@ -336,11 +311,11 @@ async function fetchAnalysis(symbol) {
     const prevHigh = parseFloat(prevCandle[2]);
     const prevLow = parseFloat(prevCandle[3]);
 
-    const rsi1m = calculateRSI(klines1m);
-    const bb = calculateBollinger(klines1m, 20, 2);
+    const rsi1m = calculateRSI(closes);
+    const bb = calculateBollinger(closes, 20, 2);
 
     const currentVol = parseFloat(lastCandle[5]);
-    const pastVols = klines1m.slice(-21, -1).map(k => parseFloat(k[5]));
+    const pastVols = list.slice(-21, -1).map(k => parseFloat(k[5]));
     const avgVol = pastVols.length > 0 ? (pastVols.reduce((a, b) => a + b, 0) / pastVols.length) : 1;
     const volMultiplier = avgVol > 0 ? (currentVol / avgVol).toFixed(1) : 1;
 
@@ -479,7 +454,7 @@ async function scanMarket() {
 
         for (const symbol of TARGET_COINS) {
             const data = await fetchAnalysis(symbol);
-            await sleep(200);
+            await sleep(150);
 
             if (!data || !data.bb) continue;
             scannedCount++;
@@ -637,7 +612,7 @@ async function scanMarket() {
 
             let primaryReason = "";
             if (scannedCount === 0) {
-                primaryReason = "Binance bağlantısı yenileniyor, bir sonraki döngüde güncellenecek.";
+                primaryReason = "Veri akışı yenileniyor, bir sonraki döngüde güncellenecek.";
             } else if (neutralRsiCount >= (totalValid * 0.40)) {
                 const pct = Math.round((neutralRsiCount / totalValid) * 100);
                 primaryReason = `Paritelerin çoğunluğu (%${pct}) orta RSI bölgesinde (35–65 arası). Aşırılaşma yok.`;
