@@ -23,6 +23,8 @@ const alertedCoins = new Map();
 const spikeAlertedCoins = new Map();
 const activeTrades = new Map();
 const processedNewsIds = new Set();
+const tradeHistory = []; // Son 12 saatin TP/Stop geçmişini tutan dizi
+
 let lastStatusReportTime = 0;
 let lastNewsCheckTime = 0;
 
@@ -66,6 +68,34 @@ function formatPrice(val, basePrice) {
     else if (ref < 1000) decimals = 2;
     else decimals = 1;
     return Number(val).toFixed(decimals);
+}
+
+// Son 12 Saatin Kar/Zarar İstatistiklerini Hesaplayan Motor
+function get12hStats() {
+    const now = Date.now();
+    const twelveHoursAgo = now - (12 * 60 * 60 * 1000);
+
+    // 12 saatten eski kayıtları temizle
+    while (tradeHistory.length > 0 && tradeHistory[0].time < twelveHoursAgo) {
+        tradeHistory.shift();
+    }
+
+    const tps = tradeHistory.filter(t => t.type === 'TP').length;
+    const stops = tradeHistory.filter(t => t.type === 'STOP').length;
+    const total = tps + stops;
+    const winRate = total > 0 ? ((tps / total) * 100).toFixed(1) : "0.0";
+
+    return { tps, stops, total, winRate };
+}
+
+function getStatsText() {
+    const stats = get12hStats();
+    if (stats.total === 0) {
+        return `📊 <b>Son 12 Saatlik Karne:</b> Henüz sonuçlanan işlem bulunmuyor.`;
+    }
+    return `📊 <b>Son 12 Saatlik Karne:</b>\n` +
+           `• ✅ Başarılı: <b>${stats.tps} TP</b> | ❌ Kayıp: <b>${stats.stops} Stop</b>\n` +
+           `• 🎯 Win Rate: <b>%${stats.winRate}</b> (Toplam ${stats.total} İşlem)`;
 }
 
 function getMarketParameters() {
@@ -221,7 +251,6 @@ async function checkSessionAlerts() {
     }
 }
 
-// Standart Wilder's Smoothing RSI Hesabı (0 hatası giderildi)
 function calculateRSI(closes, period = 14) {
     if (!Array.isArray(closes) || closes.length < period + 1) return 50;
 
@@ -250,8 +279,7 @@ function calculateRSI(closes, period = 14) {
     if (avgGain === 0) return 0;
 
     const rs = avgGain / avgLoss;
-    const rsi = 100 - (100 / (1 + rs));
-    return Math.round(rsi);
+    return Math.round(100 - (100 / (1 + rs)));
 }
 
 function calculateBollinger(closes, period = 20, multiplier = 2) {
@@ -267,7 +295,6 @@ function calculateBollinger(closes, period = 20, multiplier = 2) {
     };
 }
 
-// Bybit Derinlik Tablosu (Order Book Wall)
 async function fetchOrderBookWall(symbol, threshold) {
     try {
         const url = `https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${symbol}&limit=25`;
@@ -304,8 +331,6 @@ async function fetchBybitKlines(symbol) {
         if (!res.ok) return null;
         const json = await res.json();
         if (json.retCode !== 0 || !json.result || !json.result.list || json.result.list.length < 25) return null;
-        
-        // Kronolojik sıralama (geçmişten bugüne)
         return json.result.list.slice().reverse();
     } catch (e) {
         return null;
@@ -379,41 +404,51 @@ async function checkActiveTrades(symbol, currentPrice) {
     const nowTime = getTurkishTimeString();
 
     if (trade.side === 'LONG') {
+        // TP1 Tetiklenmesi
         if (!trade.tp1Hit && currentPrice >= trade.tp1) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
+            tradeHistory.push({ type: 'TP', time: Date.now() });
+
             const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
             const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
                            `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
                            `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n` +
+                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n\n` +
+                           `${getStatsText()}\n` +
                            `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(tp1Msg);
         }
 
+        // TP2 Tetiklenmesi
         if (currentPrice >= trade.tp2) {
+            tradeHistory.push({ type: 'TP', time: Date.now() });
             const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
             const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
                            `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP2 Fiyatı:</b> $${formatPrice(trade.tp2, trade.entry)}\n` +
                            `🚀 <b>Net Kazanç:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🎉 <i>Tebrikler! Pozisyon tamamen kârla kapatıldı.</i>\n` +
+                           `🎉 <i>Tebrikler! Pozisyon tamamen kârla kapatıldı.</i>\n\n` +
+                           `${getStatsText()}\n` +
                            `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(tp2Msg);
             activeTrades.delete(symbol);
             return;
         }
 
+        // Stop Tetiklenmesi
         if (currentPrice <= trade.sl) {
+            tradeHistory.push({ type: 'STOP', time: Date.now() });
             const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
             const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
                             `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n\n` +
+                            `${getStatsText()}\n` +
                             `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(stopMsg);
             activeTrades.delete(symbol);
@@ -422,41 +457,51 @@ async function checkActiveTrades(symbol, currentPrice) {
     }
 
     if (trade.side === 'SHORT') {
+        // TP1 Tetiklenmesi
         if (!trade.tp1Hit && currentPrice <= trade.tp1) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
+            tradeHistory.push({ type: 'TP', time: Date.now() });
+
             const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
             const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
                            `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
                            `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n` +
+                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n\n` +
+                           `${getStatsText()}\n` +
                            `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(tp1Msg);
         }
 
+        // TP2 Tetiklenmesi
         if (currentPrice <= trade.tp2) {
+            tradeHistory.push({ type: 'TP', time: Date.now() });
             const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
             const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
                            `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP2 Fiyatı:</b> $${formatPrice(trade.tp2, trade.entry)}\n` +
                            `🚀 <b>Net Kazanç:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🎉 <i>Tebrikler! Pozisyon tamamen kârla kapatıldı.</i>\n` +
+                           `🎉 <i>Tebrikler! Pozisyon tamamen kârla kapatıldı.</i>\n\n` +
+                           `${getStatsText()}\n` +
                            `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(tp2Msg);
             activeTrades.delete(symbol);
             return;
         }
 
+        // Stop Tetiklenmesi
         if (currentPrice >= trade.sl) {
+            tradeHistory.push({ type: 'STOP', time: Date.now() });
             const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
             const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
                             `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n\n` +
+                            `${getStatsText()}\n` +
                             `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(stopMsg);
             activeTrades.delete(symbol);
@@ -580,7 +625,7 @@ async function scanMarket() {
                 }
             }
 
-            // Anlık Hacim Sıçraması (Spike)
+            // Spike Radarı
             const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
             const isSpike = Math.abs(candleChange) >= 1.0;
             const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
@@ -645,7 +690,7 @@ async function scanMarket() {
             }
         }
 
-        // 10 Dakikalık Rapor
+        // 10 Dakikalık Şeffaf Durum Raporu
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
             const timeNow = getTurkishTimeString();
@@ -674,6 +719,7 @@ async function scanMarket() {
                                 `• <b>RSI Eşiği Dışı:</b> ${neutralRsiCount} Coin\n` +
                                 `• <b>Yetersiz Hacim:</b> ${lowVolumeCount} Coin\n` +
                                 `• <b>Bant Dışı Seyir:</b> ${noBandTouchCount} Coin\n\n` +
+                                `${getStatsText()}\n\n` +
                                 `🛡️ <i>Disiplinli scalp kuralı: Şartlar tam oturmadan sahte hareketlere işlem açılmaz. Tarama aralıksız sürüyor...</i>\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
 
