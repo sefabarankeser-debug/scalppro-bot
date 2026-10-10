@@ -33,7 +33,6 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
-// Bybit Futures formatında 40 coin listesi (1000'li olanlar Bybit standart sembollerine göre ayarlandı)
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -78,7 +77,8 @@ function getMarketParameters() {
             sessionName: "🌏 Asya Seansı",
             rsiShort: 68,
             rsiLong: 32,
-            minVolMultiplier: 1.05
+            minVolMultiplier: 1.05,
+            wallThreshold: 180000
         };
     }
 
@@ -87,7 +87,8 @@ function getMarketParameters() {
             sessionName: "🇪🇺 Londra Seansı",
             rsiShort: 70,
             rsiLong: 30,
-            minVolMultiplier: 1.25
+            minVolMultiplier: 1.25,
+            wallThreshold: 220000
         };
     }
 
@@ -95,7 +96,8 @@ function getMarketParameters() {
         sessionName: "🗽 New York Seansı",
         rsiShort: 73,
         rsiLong: 27,
-        minVolMultiplier: 1.40
+        minVolMultiplier: 1.40,
+        wallThreshold: 260000
     };
 }
 
@@ -219,31 +221,37 @@ async function checkSessionAlerts() {
     }
 }
 
+// Standart Wilder's Smoothing RSI Hesabı (0 hatası giderildi)
 function calculateRSI(closes, period = 14) {
     if (!Array.isArray(closes) || closes.length < period + 1) return 50;
-    let gains = 0, losses = 0;
+
+    let gains = 0;
+    let losses = 0;
+
     for (let i = 1; i <= period; i++) {
-        let diff = closes[i] - closes[i - 1];
-        if (diff >= 0) gains += diff;
-        else losses += Math.abs(diff);
+        const change = closes[i] - closes[i - 1];
+        if (change > 0) gains += change;
+        else losses += Math.abs(change);
     }
+
     let avgGain = gains / period;
     let avgLoss = losses / period;
 
     for (let i = period + 1; i < closes.length; i++) {
-        let diff = closes[i] - closes[i - 1];
-        if (diff >= 0) {
-            avgGain = (avgGain * 13 + diff) / 14;
-            avgLoss = (avgLoss * 13) / 14;
-        } else {
-            avgGain = (avgGain * 13 + diff) / 14;
-            avgLoss = (avgLoss * 13 + Math.abs(diff)) / 14;
-        }
+        const change = closes[i] - closes[i - 1];
+        const gain = change > 0 ? change : 0;
+        const loss = change < 0 ? Math.abs(change) : 0;
+
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
     }
-    if (avgLoss === 0) return 100;
+
+    if (avgLoss === 0) return avgGain === 0 ? 50 : 100;
     if (avgGain === 0) return 0;
+
     const rs = avgGain / avgLoss;
-    return Math.max(0, Math.min(100, Math.round(100 - (100 / (1 + rs)))));
+    const rsi = 100 - (100 / (1 + rs));
+    return Math.round(rsi);
 }
 
 function calculateBollinger(closes, period = 20, multiplier = 2) {
@@ -259,16 +267,46 @@ function calculateBollinger(closes, period = 20, multiplier = 2) {
     };
 }
 
-// Render IP'sini asla engellemeyen Bybit Açık API Motoru
-async function fetchBybitKlines(symbol) {
+// Bybit Derinlik Tablosu (Order Book Wall)
+async function fetchOrderBookWall(symbol, threshold) {
     try {
-        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=1&limit=35`;
+        const url = `https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${symbol}&limit=25`;
         const res = await fetch(url, { headers: { 'User-Agent': 'ScalpProBot/2.0' } });
         if (!res.ok) return null;
         const json = await res.json();
-        if (json.retCode !== 0 || !json.result || !json.result.list || json.result.list.length < 22) return null;
-        // Bybit verileri en yeniden en eskiye verir; kronolojik sıraya çeviriyoruz
-        return json.result.list.reverse();
+        if (json.retCode !== 0 || !json.result || !json.result.b || !json.result.a) return null;
+
+        let maxAskWall = 0;
+        let maxBidWall = 0;
+
+        json.result.a.forEach(a => {
+            const val = parseFloat(a[0]) * parseFloat(a[1]);
+            if (val > maxAskWall) maxAskWall = val;
+        });
+
+        json.result.b.forEach(b => {
+            const val = parseFloat(b[0]) * parseFloat(b[1]);
+            if (val > maxBidWall) maxBidWall = val;
+        });
+
+        if (maxAskWall >= threshold) return `🧱 $${(maxAskWall / 1000).toFixed(0)}K Satış Duvarı`;
+        if (maxBidWall >= threshold) return `🧱 $${(maxBidWall / 1000).toFixed(0)}K Alış Duvarı`;
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function fetchBybitKlines(symbol) {
+    try {
+        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=1&limit=50`;
+        const res = await fetch(url, { headers: { 'User-Agent': 'ScalpProBot/2.0' } });
+        if (!res.ok) return null;
+        const json = await res.json();
+        if (json.retCode !== 0 || !json.result || !json.result.list || json.result.list.length < 25) return null;
+        
+        // Kronolojik sıralama (geçmişten bugüne)
+        return json.result.list.slice().reverse();
     } catch (e) {
         return null;
     }
@@ -311,7 +349,7 @@ async function fetchAnalysis(symbol) {
     const prevHigh = parseFloat(prevCandle[2]);
     const prevLow = parseFloat(prevCandle[3]);
 
-    const rsi1m = calculateRSI(closes);
+    const rsi1m = calculateRSI(closes, 14);
     const bb = calculateBollinger(closes, 20, 2);
 
     const currentVol = parseFloat(lastCandle[5]);
@@ -542,7 +580,7 @@ async function scanMarket() {
                 }
             }
 
-            // Spike Radarı
+            // Anlık Hacim Sıçraması (Spike)
             const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
             const isSpike = Math.abs(candleChange) >= 1.0;
             const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
@@ -568,6 +606,9 @@ async function scanMarket() {
             // Sinyal İletimi
             const lastAlertTime = alertedCoins.get(sym) || 0;
             if (signal && !activeTrades.has(sym) && (now - lastAlertTime >= 15 * 60 * 1000)) {
+                const wallInfo = await fetchOrderBookWall(sym, config.wallThreshold);
+                const wallText = wallInfo ? `\n• ${wallInfo}` : '';
+
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                             `⚡ <b>KÜRESEL SEANS SCALP SİNYALİ</b> ⚡\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
@@ -583,7 +624,7 @@ async function scanMarket() {
                             `• Aktif Seans: ${config.sessionName}\n` +
                             `• BTC 3dk Değişim: %${btc.change3m} (Stabil)\n` +
                             `• 1dk RSI: ${rsi1m}\n` +
-                            `• Onay: ${signal.reason}\n\n` +
+                            `• Onay: ${signal.reason}${wallText}\n\n` +
                             `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
                             `⚠️ <i>"YTD" HEPSİ.</i>`;
 
@@ -604,7 +645,7 @@ async function scanMarket() {
             }
         }
 
-        // 10 Dakikalık Şeffaf Durum Raporu
+        // 10 Dakikalık Rapor
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 10 * 60 * 1000)) {
             const timeNow = getTurkishTimeString();
