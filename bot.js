@@ -492,8 +492,12 @@ async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
         }
     }
 
-    // 2 saat boyunca ne stop ne TP olmadıysa bellekten düşür
+    // 2 saat boyunca hedefe/stopa ulaşmayan işlemleri nötr olarak kapat
     if (Date.now() - trade.time > 2 * 60 * 60 * 1000) {
+        const timeoutMsg = `⚖️ <b>ZAMAN AŞIMI | #${cleanSymbol}/USDT</b>\n\n` +
+                           `2 saat boyunca TP veya Stop seviyelerine ulaşılamadığı için canlı takip sonlandırıldı.\n` +
+                           `⏱ <b>${nowTime} (TSİ)</b>`;
+        await sendTelegramMessage(timeoutMsg);
         activeTrades.delete(symbol);
     }
 }
