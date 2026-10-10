@@ -1,8 +1,20 @@
+const http = require('http');
+const https = require('https');
+
 // ==========================================
-// 1. TELEGRAM & ORTAM AYARLARI
+// 1. TELEGRAM & ORTAM DEĞİŞKENLERİ
 // ==========================================
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'BURAYA_BOT_TOKEN_GIRIN';
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || 'BURAYA_CHAT_ID_GIRIN';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+// Render Web Service Port Bağlantısı
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Scalp Botu ve Flaş Haber Radarı Aktif 🚀');
+}).listen(PORT, () => {
+    console.log(`Render Web Portu dinleniyor: ${PORT}`);
+});
 
 // ==========================================
 // 2. PARİTE HAVUZU (55 YÜKSEK VOLATİLİTELİ COIN)
@@ -62,40 +74,75 @@ const CRITICAL_KEYWORDS = [
 ];
 
 // ==========================================
-// 4. HAFIZA & YARDIMCI DEĞİŞKENLER
+// 4. HAFIZA & YARDIMCI İŞLEMLER
 // ==========================================
 let lastNewsCheckTime = 0;
 const processedNewsIds = new Set();
-const lastSignalTime = new Map(); // Parite bazlı spam engelleme (15 dk)
+const lastSignalTime = new Map();
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// ==========================================
-// 5. TELEGRAM GÖNDERİCİ
-// ==========================================
-async function sendTelegramMessage(text) {
-    try {
-        const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: TELEGRAM_CHAT_ID,
-                text: text,
-                parse_mode: 'HTML',
-                disable_web_page_preview: true
-            })
-        });
-        if (!res.ok) {
-            console.error(`Telegram gönderim hatası: ${res.statusText}`);
+// Dış modül gerektirmeyen HTTPS istek fonksiyonu
+function fetchJSON(url) {
+    return new Promise((resolve, reject) => {
+        https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(data));
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        }).on('error', reject);
+    });
+}
+
+// Telegram Mesaj Gönderici
+function sendTelegramMessage(text) {
+    return new Promise((resolve) => {
+        if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+            console.error("HATA: TELEGRAM_BOT_TOKEN veya TELEGRAM_CHAT_ID tanımlı değil!");
+            return resolve(false);
         }
-    } catch (e) {
-        console.error('Telegram API Bağlantı Hatası:', e.message);
-    }
+
+        const payload = JSON.stringify({
+            chat_id: TELEGRAM_CHAT_ID,
+            text: text,
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+        });
+
+        const options = {
+            hostname: 'api.telegram.org',
+            port: 443,
+            path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payload)
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let resData = '';
+            res.on('data', chunk => resData += chunk);
+            res.on('end', () => resolve(res.statusCode === 200));
+        });
+
+        req.on('error', (e) => {
+            console.error('Telegram Gönderim Hatası:', e.message);
+            resolve(false);
+        });
+
+        req.write(payload);
+        req.end();
+    });
 }
 
 // ==========================================
-// 6. TEKNİK İNDİKATÖR HESAPLAMALARI
+// 5. TEKNİK İNDİKATÖR FONKSİYONLARI
 // ==========================================
 function calculateRSI(closes, period = 14) {
     if (closes.length < period + 1) return 50;
@@ -149,7 +196,7 @@ function getActiveSession() {
 }
 
 // ==========================================
-// 7. GELİŞMİŞ HABER RADARI (CRYPTOPANIC)
+// 6. FLAŞ HABER MOTORU (CRYPTOPANIC)
 // ==========================================
 async function checkBreakingNews() {
     try {
@@ -157,9 +204,7 @@ async function checkBreakingNews() {
         if (now - lastNewsCheckTime < 60 * 1000) return;
         lastNewsCheckTime = now;
 
-        const res = await fetch('https://cryptopanic.com/api/free/v1/posts/?public=true');
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await fetchJSON('https://cryptopanic.com/api/free/v1/posts/?public=true');
         if (!data || !data.results || !Array.isArray(data.results)) return;
 
         for (const item of data.results.slice(0, 15)) {
@@ -222,13 +267,13 @@ async function checkBreakingNews() {
 }
 
 // ==========================================
-// 8. TEKNİK SİNYAL ÜRETİCİSİ (5M SCALP)
+// 7. 5M SCALP TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
-        const btcRes = await fetch('https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=2');
-        if (!btcRes.ok) return;
-        const btcData = await btcRes.json();
+        const btcData = await fetchJSON('https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=2');
+        if (!Array.isArray(btcData) || btcData.length < 2) return;
+
         const btcClosePrev = parseFloat(btcData[0][4]);
         const btcCloseLast = parseFloat(btcData[1][4]);
         const btcChange5m = ((btcCloseLast - btcClosePrev) / btcClosePrev) * 100;
@@ -241,9 +286,13 @@ async function scanMarket() {
             const lastTime = lastSignalTime.get(symbol) || 0;
             if (Date.now() - lastTime < 15 * 60 * 1000) continue;
 
-            const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=5m&limit=50`);
-            if (!res.ok) continue;
-            const klines = await res.json();
+            let klines;
+            try {
+                klines = await fetchJSON(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=5m&limit=50`);
+            } catch (err) {
+                continue;
+            }
+
             if (!Array.isArray(klines) || klines.length < 30) continue;
 
             const closes = klines.map(k => parseFloat(k[4]));
@@ -339,11 +388,11 @@ async function scanMarket() {
 }
 
 // ==========================================
-// 9. BAŞLATICI
+// 8. ANA ÇALIŞTIRICI
 // ==========================================
 async function main() {
     console.log("🚀 Scalp Botu & Flaş Haber Radarı Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Aktif:</b> 5m Scalp Tarayıcısı ve Gelişmiş Haber Radarı çalışıyor.");
+    await sendTelegramMessage("🤖 <b>Sistem Aktif:</b> 5m Scalp Tarayıcısı ve Gelişmiş Haber Radarı devrede.");
 
     while (true) {
         await checkBreakingNews();
