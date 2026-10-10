@@ -1,5 +1,3 @@
-import fetch from 'node-fetch';
-
 // ==========================================
 // 1. TELEGRAM & ORTAM AYARLARI
 // ==========================================
@@ -64,7 +62,7 @@ const CRITICAL_KEYWORDS = [
 ];
 
 // ==========================================
-// 4. HAFIZA & RATE LIMIT DEĞİŞKENLERİ
+// 4. HAFIZA & YARDIMCI DEĞİŞKENLER
 // ==========================================
 let lastNewsCheckTime = 0;
 const processedNewsIds = new Set();
@@ -73,7 +71,7 @@ const lastSignalTime = new Map(); // Parite bazlı spam engelleme (15 dk)
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ==========================================
-// 5. YARDIMCI TELEGRAM FONKSİYONU
+// 5. TELEGRAM GÖNDERİCİ
 // ==========================================
 async function sendTelegramMessage(text) {
     try {
@@ -143,7 +141,6 @@ function calculateBollingerBands(closes, period = 20, multiplier = 2) {
     };
 }
 
-// Aktif küresel seansı tespit etme
 function getActiveSession() {
     const hour = new Date().getUTCHours();
     if (hour >= 13 && hour <= 21) return '🗽 New York Seansı';
@@ -152,12 +149,11 @@ function getActiveSession() {
 }
 
 // ==========================================
-// 7. HABER RADARI (GELİŞMİŞ CRYPTOPANIC MOTORU)
+// 7. GELİŞMİŞ HABER RADARI (CRYPTOPANIC)
 // ==========================================
 async function checkBreakingNews() {
     try {
         const now = Date.now();
-        // 60 saniyede bir tara
         if (now - lastNewsCheckTime < 60 * 1000) return;
         lastNewsCheckTime = now;
 
@@ -166,7 +162,6 @@ async function checkBreakingNews() {
         const data = await res.json();
         if (!data || !data.results || !Array.isArray(data.results)) return;
 
-        // Son 15 haberi derinlemesine tara
         for (const item of data.results.slice(0, 15)) {
             const newsId = item.id.toString();
             if (processedNewsIds.has(newsId)) continue;
@@ -182,7 +177,6 @@ async function checkBreakingNews() {
 
             let matchedCoin = null;
 
-            // 1. Proje adı ve takma isim taraması (Conflux, Dymension vb.)
             for (const [ticker, aliases] of Object.entries(COIN_ALIASES)) {
                 if (aliases.some(alias => new RegExp(`\\b${alias}\\b`, 'i').test(lowerTitle))) {
                     matchedCoin = ticker;
@@ -190,7 +184,6 @@ async function checkBreakingNews() {
                 }
             }
 
-            // 2. Havuzdaki sembol taraması
             if (!matchedCoin) {
                 for (const sym of TARGET_COINS) {
                     const clean = sym.replace('USDT', '').replace('1000', '');
@@ -229,11 +222,10 @@ async function checkBreakingNews() {
 }
 
 // ==========================================
-// 8. TEKNİK SİNYAL ÜRETİCİSİ (5M SCALP STRATEJİSİ)
+// 8. TEKNİK SİNYAL ÜRETİCİSİ (5M SCALP)
 // ==========================================
 async function scanMarket() {
     try {
-        // BTC 5m filtre kontrolü
         const btcRes = await fetch('https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=5m&limit=2');
         if (!btcRes.ok) return;
         const btcData = await btcRes.json();
@@ -246,7 +238,6 @@ async function scanMarket() {
         const session = getActiveSession();
 
         for (const symbol of TARGET_COINS) {
-            // Son 15 dakikada aynı pariteye sinyal atıldıysa atla
             const lastTime = lastSignalTime.get(symbol) || 0;
             if (Date.now() - lastTime < 15 * 60 * 1000) continue;
 
@@ -258,16 +249,13 @@ async function scanMarket() {
             const closes = klines.map(k => parseFloat(k[4]));
             const highs = klines.map(k => parseFloat(k[2]));
             const lows = klines.map(k => parseFloat(k[3]));
-            const opens = klines.map(k => parseFloat(k[1]));
             const volumes = klines.map(k => parseFloat(k[5]));
 
             const currentClose = closes[closes.length - 1];
             const currentHigh = highs[highs.length - 1];
             const currentLow = lows[lows.length - 1];
-            const currentOpen = opens[opens.length - 1];
             const currentVol = volumes[volumes.length - 1];
 
-            // Ortalama hacim (son 20 mum)
             const avgVol = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
             const volMultiplier = (currentVol / avgVol).toFixed(1);
 
@@ -275,14 +263,12 @@ async function scanMarket() {
             const bb = calculateBollingerBands(closes, 20, 2);
             if (!bb) continue;
 
-            // SHORT KRİTERİ: RSI >= 70, Bollinger Üst Bandı Delme/Ret, Hacim >= 1.2x, Tepe Fitili
             const isShort = (rsi >= 70) &&
                             (currentHigh >= bb.upper) &&
                             (currentClose < currentHigh) &&
                             (currentVol >= avgVol * 1.2) &&
                             !isBtcPumping;
 
-            // LONG KRİTERİ: RSI <= 30, Bollinger Alt Bandı Delme/Ret, Hacim >= 1.2x, Dip Fitili
             const isLong = (rsi <= 30) &&
                            (currentLow <= bb.lower) &&
                            (currentClose > currentLow) &&
@@ -353,7 +339,7 @@ async function scanMarket() {
 }
 
 // ==========================================
-// 9. ANA ÇALIŞTIRICI DÖNGÜSÜ
+// 9. BAŞLATICI
 // ==========================================
 async function main() {
     console.log("🚀 Scalp Botu & Flaş Haber Radarı Başlatıldı...");
@@ -362,7 +348,7 @@ async function main() {
     while (true) {
         await checkBreakingNews();
         await scanMarket();
-        await sleep(15000); // 15 saniyede bir döngü
+        await sleep(15000);
     }
 }
 
