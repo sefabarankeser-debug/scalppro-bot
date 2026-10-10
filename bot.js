@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro Global Market Sessions & Spike Radar Active\n');
+    res.end('ScalpPro 40-Coin Dedicated Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -392,7 +392,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const config = getMarketParameters();
-        console.log(`Piyasa taranıyor [${config.sessionName}]...`, getTurkishTimeString());
+        console.log(`40 Parite taranıyor [${config.sessionName}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -417,35 +417,11 @@ async function scanMarket() {
             const cleanSymbol = sym.replace('USDT', '');
             const binanceUrl = `https://www.binance.com/tr/futures/${sym}`;
 
-            // --- ⚡ MODÜL 1: ANLIK %1.8+ PUMP / DUMP RADARI ---
-            const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
-            if (now - lastSpikeTime >= 5 * 60 * 1000) {
-                const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
-
-                if (Math.abs(candleChange) >= 1.8) {
-                    const isPump = candleChange > 0;
-                    const changeIcon = isPump ? "🟢" : "🔴";
-                    const changeType = isPump ? "PUMP DETECTED" : "DUMP DETECTED";
-
-                    const spikeMsg = `💰 <b>#${cleanSymbol}/USDT</b> (${changeType})\n` +
-                                     `<b>Change:</b> ${changeIcon} %${candleChange.toFixed(2)}\n` +
-                                     `<b>Last Price:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
-                                     `<b>Previous Price:</b> $${formatPrice(openPrice, currentPrice)}\n` +
-                                     `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n` +
-                                     `⏱ <b>${getTurkishTimeString()} (TSİ)</b>`;
-
-                    await sendTelegramMessage(spikeMsg);
-                    spikeAlertedCoins.set(sym, now);
-                }
-            }
-
-            // --- 🎯 MODÜL 2: KESKİN DÖNÜŞ SCALP SİNYALİ ---
-            const lastAlertTime = alertedCoins.get(sym) || 0;
-            if (now - lastAlertTime < 15 * 60 * 1000) continue;
-
             let signal = null;
 
-            // SHORT Kontrolü
+            // --- 1. STRATEJİ VERİLERİNİN DENETİMİ (SCALP ALGORİTMASI) ---
+
+            // SHORT Kuralları
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
@@ -471,7 +447,7 @@ async function scanMarket() {
                 }
             }
 
-            // LONG Kontrolü
+            // LONG Kuralları
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
@@ -497,7 +473,33 @@ async function scanMarket() {
                 }
             }
 
-            if (signal) {
+            // --- 2. ANLIK PUMP / DUMP DURUMU (VERİ TUTMUYORSA SADECE BİLGİ VERİR) ---
+            const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
+            const isSpike = Math.abs(candleChange) >= 1.0;
+            const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
+
+            if (isSpike && (now - lastSpikeTime >= 4 * 60 * 1000)) {
+                // Eğer strateji kuralları bu patlamada teyit VERMEDİYSE: Sadece bilgi bildirimi geç
+                if (!signal) {
+                    const isPump = candleChange > 0;
+                    const changeIcon = isPump ? "🟢" : "🔴";
+
+                    const infoMsg = `💰 <b>#${cleanSymbol}USDT</b> (Anlık Hacim Dalgası)\n` +
+                                    `<b>Change:</b> ${changeIcon} %${candleChange.toFixed(2)}\n` +
+                                    `<b>Last Price:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
+                                    `<b>Previous Price:</b> $${formatPrice(openPrice, currentPrice)}\n\n` +
+                                    `ℹ️ <i>Not: Strateji dönüş teyitleri oluşmadı. Sadece bilgilendirme amaçlıdır, işleme girmeyiniz.</i>\n\n` +
+                                    `🔗 <a href="${binanceUrl}">Binance</a> | <a href="https://www.tradingview.com/symbols/${sym}">TV</a>\n` +
+                                    `⏱ <b>${getTurkishTimeString()} (TSİ)</b>`;
+
+                    await sendTelegramMessage(infoMsg);
+                    spikeAlertedCoins.set(sym, now);
+                }
+            }
+
+            // --- 3. KURALLAR TAM TUTUYORSA: TP/STOP'LU RESMİ SCALP SİNYALİ GÖNDER ---
+            const lastAlertTime = alertedCoins.get(sym) || 0;
+            if (signal && (now - lastAlertTime >= 15 * 60 * 1000)) {
                 const wallInfo = await fetchOrderBookWall(sym, config.wallThreshold);
                 const wallText = wallInfo ? `\n${wallInfo}` : '';
 
