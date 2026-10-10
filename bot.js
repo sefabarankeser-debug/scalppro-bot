@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro 50-Coin 5M High-Accuracy Engine Active\n');
+    res.end('ScalpPro 55-Coin 5M High-Accuracy Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -35,7 +35,7 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
-// Binance Futures ve Bybit vadeli piyasalarında tam uyumlu 50 parite
+// Binance Futures ve Bybit vadeli piyasalarında tam uyumlu, seri 55 parite
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -46,7 +46,8 @@ const TARGET_COINS = [
     "JUPUSDT", "ENAUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT",
     "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT",
     "LINKUSDT", "FTMUSDT", "SANDUSDT", "MANAUSDT", "THETAUSDT",
-    "LTCUSDT", "ATOMUSDT", "FILUSDT", "ETCUSDT", "ALGOUSDT"
+    "LTCUSDT", "ATOMUSDT", "FILUSDT", "ETCUSDT", "ALGOUSDT",
+    "DYMUSDT", "ZROUSDT", "STRKUSDT", "PYTHUSDT", "WUSDT"
 ];
 
 const CRITICAL_KEYWORDS = [
@@ -331,7 +332,6 @@ async function fetchOrderBookWall(symbol, threshold) {
     }
 }
 
-// 5 Dakikalık Mumları Çeken Fonksiyon (interval=5)
 async function fetchBybitKlines(symbol) {
     try {
         const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=5&limit=50`;
@@ -353,7 +353,7 @@ async function checkBtcCondition() {
     const price3mAgo = parseFloat(list[list.length - 4][1]);
     const change3m = ((currentPrice - price3mAgo) / price3mAgo) * 100;
 
-    const isVolatile = Math.abs(change3m) >= 0.85; // 5 dakikalık periyot için uyumlu eşik
+    const isVolatile = Math.abs(change3m) >= 0.85;
     let btcTrend = "NEUTRAL";
     if (change3m <= -0.45) btcTrend = "DUMP";
     else if (change3m >= 0.45) btcTrend = "PUMP";
@@ -522,7 +522,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const config = getMarketParameters();
-        console.log(`50 Parite (5dk) taranıyor [${config.sessionName}]...`, getTurkishTimeString());
+        console.log(`55 Parite (5dk) taranıyor [${config.sessionName}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
