@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro Universal Engine Active\n');
+    res.end('ScalpPro 45-Coin Dedicated Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -23,7 +23,7 @@ const alertedCoins = new Map();
 const spikeAlertedCoins = new Map();
 const activeTrades = new Map();
 const processedNewsIds = new Set();
-const tradeHistory = []; // Son 12 saatin TP/Stop geçmişini tutan dizi
+const tradeHistory = []; // Son 12 saatin TP/Stop geçmişi
 
 let lastStatusReportTime = 0;
 let lastNewsCheckTime = 0;
@@ -35,6 +35,7 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
+// 45 Adet Yüksek Likiditeli Futures Paritesi
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -43,7 +44,8 @@ const TARGET_COINS = [
     "1000BONKUSDT", "BCHUSDT", "PENDLEUSDT", "GALAUSDT", "STXUSDT",
     "ORDIUSDT", "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT",
     "JUPUSDT", "ENAUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT",
-    "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT"
+    "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT",
+    "LINKUSDT", "FTMUSDT", "KASUSDT", "POPCATUSDT", "BLURUSDT"
 ];
 
 const CRITICAL_KEYWORDS = [
@@ -70,12 +72,10 @@ function formatPrice(val, basePrice) {
     return Number(val).toFixed(decimals);
 }
 
-// Son 12 Saatin Kar/Zarar İstatistiklerini Hesaplayan Motor
 function get12hStats() {
     const now = Date.now();
     const twelveHoursAgo = now - (12 * 60 * 60 * 1000);
 
-    // 12 saatten eski kayıtları temizle
     while (tradeHistory.length > 0 && tradeHistory[0].time < twelveHoursAgo) {
         tradeHistory.shift();
     }
@@ -91,7 +91,7 @@ function get12hStats() {
 function getStatsText() {
     const stats = get12hStats();
     if (stats.total === 0) {
-        return `📊 <b>Son 12 Saatlik Karne:</b> Henüz sonuçlanan işlem bulunmuyor.`;
+        return `📊 <b>Son 12 Saatlik Karne:</b> Henüz tamamlanan işlem bulunmuyor.`;
     }
     return `📊 <b>Son 12 Saatlik Karne:</b>\n` +
            `• ✅ Başarılı: <b>${stats.tps} TP</b> | ❌ Kayıp: <b>${stats.stops} Stop</b>\n` +
@@ -404,7 +404,6 @@ async function checkActiveTrades(symbol, currentPrice) {
     const nowTime = getTurkishTimeString();
 
     if (trade.side === 'LONG') {
-        // TP1 Tetiklenmesi
         if (!trade.tp1Hit && currentPrice >= trade.tp1) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
@@ -422,7 +421,6 @@ async function checkActiveTrades(symbol, currentPrice) {
             await sendTelegramMessage(tp1Msg);
         }
 
-        // TP2 Tetiklenmesi
         if (currentPrice >= trade.tp2) {
             tradeHistory.push({ type: 'TP', time: Date.now() });
             const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
@@ -439,7 +437,6 @@ async function checkActiveTrades(symbol, currentPrice) {
             return;
         }
 
-        // Stop Tetiklenmesi
         if (currentPrice <= trade.sl) {
             tradeHistory.push({ type: 'STOP', time: Date.now() });
             const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
@@ -457,7 +454,6 @@ async function checkActiveTrades(symbol, currentPrice) {
     }
 
     if (trade.side === 'SHORT') {
-        // TP1 Tetiklenmesi
         if (!trade.tp1Hit && currentPrice <= trade.tp1) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
@@ -475,7 +471,6 @@ async function checkActiveTrades(symbol, currentPrice) {
             await sendTelegramMessage(tp1Msg);
         }
 
-        // TP2 Tetiklenmesi
         if (currentPrice <= trade.tp2) {
             tradeHistory.push({ type: 'TP', time: Date.now() });
             const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
@@ -492,7 +487,6 @@ async function checkActiveTrades(symbol, currentPrice) {
             return;
         }
 
-        // Stop Tetiklenmesi
         if (currentPrice >= trade.sl) {
             tradeHistory.push({ type: 'STOP', time: Date.now() });
             const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
@@ -520,7 +514,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const config = getMarketParameters();
-        console.log(`40 Parite taranıyor [${config.sessionName}]...`, getTurkishTimeString());
+        console.log(`45 Parite taranıyor [${config.sessionName}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
