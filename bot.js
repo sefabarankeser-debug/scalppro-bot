@@ -53,6 +53,19 @@ const headers = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+function formatPrice(val, basePrice) {
+    if (!val || isNaN(val)) return "0.00";
+    const ref = basePrice || val;
+    let decimals = 4;
+    if (ref < 0.001) decimals = 7;
+    else if (ref < 0.1) decimals = 6;
+    else if (ref < 1) decimals = 5;
+    else if (ref < 10) decimals = 4;
+    else if (ref < 1000) decimals = 2;
+    else decimals = 1;
+    return Number(val).toFixed(decimals);
+}
+
 function getMarketParameters() {
     const now = new Date();
     const trHour = (now.getUTCHours() + 3) % 24;
@@ -400,56 +413,52 @@ async function scanMarket() {
 
             let signal = null;
 
-            // SHORT Kontrolü
+            // SHORT: 1s RSI en az 38 olmalı (aşırı dipte short açılmaz)
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
-            if (rsi1m >= config.rsiShort && touchedUpper && hasUpperRejection && volMultiplier >= config.minVolMultiplier && rsi1h <= 66 && btc.btcTrend !== "PUMP") {
+            if (rsi1m >= config.rsiShort && touchedUpper && hasUpperRejection && volMultiplier >= config.minVolMultiplier && rsi1h >= 38 && rsi1h <= 66 && btc.btcTrend !== "PUMP") {
                 const highestPoint = Math.max(highPrice, prevHigh);
                 const sl = highestPoint * 1.0035;
                 const riskDist = sl - currentPrice;
 
-                // Hedefler: TP1 = 1.5R, TP2 = 2.5R (veya Alt Bant)
                 const tp1 = currentPrice - (riskDist * 1.5);
                 const tp2 = Math.min(bb.lower, currentPrice - (riskDist * 2.5));
 
                 const profitPercentTP1 = ((currentPrice - tp1) / currentPrice) * 100;
 
-                // En az %0.50 kâr potansiyeli olmayan küçük marjları ele
-                if (profitPercentTP1 >= 0.50) {
+                if (profitPercentTP1 >= 0.45) {
                     signal = {
                         type: "🔴 SHORT SCALP",
-                        sl: sl.toFixed(4),
-                        tp1: tp1.toFixed(4),
-                        tp2: tp2.toFixed(4),
+                        sl: formatPrice(sl, currentPrice),
+                        tp1: formatPrice(tp1, currentPrice),
+                        tp2: formatPrice(tp2, currentPrice),
                         tp1Pct: profitPercentTP1.toFixed(2),
                         reason: `Bant Reddi / Tepe Fitili, Hacim ${volMultiplier}x (${config.sessionName})`
                     };
                 }
             }
 
-            // LONG Kontrolü
+            // LONG: 1s RSI en fazla 62 olmalı (aşırı şişmiş coinde long açılmaz)
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
-            if (rsi1m <= config.rsiLong && touchedLower && hasLowerRejection && volMultiplier >= config.minVolMultiplier && rsi1h >= 34 && btc.btcTrend !== "DUMP") {
+            if (rsi1m <= config.rsiLong && touchedLower && hasLowerRejection && volMultiplier >= config.minVolMultiplier && rsi1h <= 62 && rsi1h >= 34 && btc.btcTrend !== "DUMP") {
                 const lowestPoint = Math.min(lowPrice, prevLow);
                 const sl = lowestPoint * 0.9965;
                 const riskDist = currentPrice - sl;
 
-                // Hedefler: TP1 = 1.5R, TP2 = 2.5R (veya Üst Bant)
                 const tp1 = currentPrice + (riskDist * 1.5);
                 const tp2 = Math.max(bb.upper, currentPrice + (riskDist * 2.5));
 
                 const profitPercentTP1 = ((tp1 - currentPrice) / currentPrice) * 100;
 
-                // En az %0.50 kâr potansiyeli olmayan küçük marjları ele
-                if (profitPercentTP1 >= 0.50) {
+                if (profitPercentTP1 >= 0.45) {
                     signal = {
                         type: "🟢 LONG SCALP",
-                        sl: sl.toFixed(4),
-                        tp1: tp1.toFixed(4),
-                        tp2: tp2.toFixed(4),
+                        sl: formatPrice(sl, currentPrice),
+                        tp1: formatPrice(tp1, currentPrice),
+                        tp2: formatPrice(tp2, currentPrice),
                         tp1Pct: profitPercentTP1.toFixed(2),
                         reason: `Dip Tepkisi / Destek Fitili, Hacim ${volMultiplier}x (${config.sessionName})`
                     };
@@ -466,7 +475,7 @@ async function scanMarket() {
                             `⚡ <b>KÜRESEL SEANS SCALP SİNYALİ</b> ⚡\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
                             `🎯 <b>Yön:</b> ${signal.type}\n` +
-                            `💵 <b>Giriş Fiyatı:</b> $${currentPrice}\n` +
+                            `💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
                             `🛑 <b>Önerilen Stop:</b> $${signal.sl}\n\n` +
                             `🎯 <b>Kademeli Kâr Hedefleri:</b>\n` +
                             `• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n` +
