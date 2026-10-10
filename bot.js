@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro 45-Coin High-Accuracy Engine Active\n');
+    res.end('ScalpPro 50-Coin Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -35,7 +35,7 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
-// Bybit vadeli piyasasında kesin bulunan ve en hacimli 45 parite
+// Hem Binance Futures hem Bybit'te kesin bulunan en yüksek likiditeli 50 parite
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -45,7 +45,8 @@ const TARGET_COINS = [
     "ORDIUSDT", "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT",
     "JUPUSDT", "ENAUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT",
     "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT",
-    "LINKUSDT", "FTMUSDT", "SANDUSDT", "MANAUSDT", "THETAUSDT"
+    "LINKUSDT", "FTMUSDT", "SANDUSDT", "MANAUSDT", "THETAUSDT",
+    "LTCUSDT", "ATOMUSDT", "FILUSDT", "ETCUSDT", "ALGOUSDT"
 ];
 
 const CRITICAL_KEYWORDS = [
@@ -104,7 +105,6 @@ function getStatsText() {
     return `📊 <b>Canlı Başarı Karnesi:</b>\n${text1}\n${text12}`;
 }
 
-// Dengeli Seans Parametreleri (Akıcı Fırsat Yakalama)
 function getMarketParameters() {
     const now = new Date();
     const trHour = (now.getUTCHours() + 3) % 24;
@@ -521,7 +521,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const config = getMarketParameters();
-        console.log(`45 Parite taranıyor [${config.sessionName}]...`, getTurkishTimeString());
+        console.log(`50 Parite taranıyor [${config.sessionName}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
