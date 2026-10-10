@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro Global Market Sessions & News Radar Active\n');
+    res.end('ScalpPro Global Market Sessions & Spike Radar Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -20,6 +20,7 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAE4xogVFRIqIjP
 const CHAT_ID = process.env.CHAT_ID || "-1004412694884";
 
 const alertedCoins = new Map();
+const spikeAlertedCoins = new Map();
 const processedNewsIds = new Set();
 let lastStatusReportTime = 0;
 let lastNewsCheckTime = 0;
@@ -53,7 +54,6 @@ const headers = {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Türkiye saatini kesin olarak veren formatlayıcı
 function getTurkishTimeString() {
     return new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul' });
 }
@@ -73,7 +73,6 @@ function formatPrice(val, basePrice) {
 
 function getMarketParameters() {
     const now = new Date();
-    // TSİ (UTC+3)
     const trHour = (now.getUTCHours() + 3) % 24;
 
     if (trHour >= 2 && trHour < 10) {
@@ -355,6 +354,7 @@ async function fetchAnalysis(symbol) {
         const lowPrice = parseFloat(lastCandle[3]);
         const currentPrice = parseFloat(lastCandle[4]);
 
+        const prevOpen = parseFloat(prevCandle[1]);
         const prevHigh = parseFloat(prevCandle[2]);
         const prevLow = parseFloat(prevCandle[3]);
 
@@ -373,6 +373,7 @@ async function fetchAnalysis(symbol) {
             openPrice,
             highPrice,
             lowPrice,
+            prevOpen,
             prevHigh,
             prevLow,
             rsi1m,
@@ -412,9 +413,34 @@ async function scanMarket() {
                 prevHigh, prevLow, rsi1m, rsi1h, bb, volMultiplier
             } = data;
 
-            const lastAlertTime = alertedCoins.get(sym) || 0;
             const now = Date.now();
+            const cleanSymbol = sym.replace('USDT', '');
+            const binanceUrl = `https://www.binance.com/tr/futures/${sym}`;
 
+            // --- ⚡ MODÜL 1: ANLIK %1.8+ PUMP / DUMP RADARI ---
+            const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
+            if (now - lastSpikeTime >= 5 * 60 * 1000) {
+                const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
+
+                if (Math.abs(candleChange) >= 1.8) {
+                    const isPump = candleChange > 0;
+                    const changeIcon = isPump ? "🟢" : "🔴";
+                    const changeType = isPump ? "PUMP DETECTED" : "DUMP DETECTED";
+
+                    const spikeMsg = `💰 <b>#${cleanSymbol}/USDT</b> (${changeType})\n` +
+                                     `<b>Change:</b> ${changeIcon} %${candleChange.toFixed(2)}\n` +
+                                     `<b>Last Price:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
+                                     `<b>Previous Price:</b> $${formatPrice(openPrice, currentPrice)}\n` +
+                                     `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n` +
+                                     `⏱ <b>${getTurkishTimeString()} (TSİ)</b>`;
+
+                    await sendTelegramMessage(spikeMsg);
+                    spikeAlertedCoins.set(sym, now);
+                }
+            }
+
+            // --- 🎯 MODÜL 2: KESKİN DÖNÜŞ SCALP SİNYALİ ---
+            const lastAlertTime = alertedCoins.get(sym) || 0;
             if (now - lastAlertTime < 15 * 60 * 1000) continue;
 
             let signal = null;
@@ -472,10 +498,8 @@ async function scanMarket() {
             }
 
             if (signal) {
-                const cleanSymbol = sym.replace('USDT', '');
                 const wallInfo = await fetchOrderBookWall(sym, config.wallThreshold);
                 const wallText = wallInfo ? `\n${wallInfo}` : '';
-                const binanceUrl = `https://www.binance.com/tr/futures/${sym}`;
 
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                             `⚡ <b>KÜRESEL SEANS SCALP SİNYALİ</b> ⚡\n\n` +
