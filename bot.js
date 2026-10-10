@@ -42,7 +42,6 @@ const TARGET_COINS = [
     "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT"
 ];
 
-// Kritik makro ve genel piyasa sarsıcı anahtar kelimeler
 const CRITICAL_KEYWORDS = [
     "sec", "fed", "powell", "binance", "tether", "etf", "interest rate",
     "inflation", "cpi", "hack", "liquidation", "ban", "lawsuit", "court", "war", "tariff"
@@ -111,11 +110,9 @@ async function sendTelegramMessage(text) {
     }
 }
 
-// Haber Radarı: Kripto geneli sert kırılım ve 40 coin haberleri
 async function checkBreakingNews() {
     try {
         const now = Date.now();
-        // 2 dakikada birden sık sorgulama yapıp servisi yormayalım
         if (now - lastNewsCheckTime < 2 * 60 * 1000) return;
         lastNewsCheckTime = now;
 
@@ -124,13 +121,11 @@ async function checkBreakingNews() {
 
         if (!data || !data.results || !Array.isArray(data.results)) return;
 
-        // En son gelen 6 haberi incele
         for (const item of data.results.slice(0, 6)) {
             const newsId = item.id.toString();
             if (processedNewsIds.has(newsId)) continue;
             processedNewsIds.add(newsId);
 
-            // Hafızanın şişmemesi için en eski id'leri temizle
             if (processedNewsIds.size > 200) {
                 const firstKey = processedNewsIds.values().next().value;
                 processedNewsIds.delete(firstKey);
@@ -139,11 +134,9 @@ async function checkBreakingNews() {
             const title = (item.title || "").trim();
             const lowerTitle = title.toLowerCase();
 
-            // 1. Durum: Listemizdeki coinlerden birine ait mi?
             let matchedCoin = null;
             for (const sym of TARGET_COINS) {
                 const clean = sym.replace('USDT', '').replace('1000', '');
-                // Başlıkta tam kelime olarak coin ismi geçiyor mu?
                 const regex = new RegExp(`\\b${clean}\\b`, 'i');
                 if (regex.test(lowerTitle)) {
                     matchedCoin = clean;
@@ -151,7 +144,6 @@ async function checkBreakingNews() {
                 }
             }
 
-            // 2. Durum: BTC veya piyasayı sert sarsacak makro bir haber mi?
             const isMacroOrBtc = lowerTitle.includes('bitcoin') || lowerTitle.includes('btc') ||
                                  CRITICAL_KEYWORDS.some(kw => lowerTitle.includes(kw));
 
@@ -159,7 +151,7 @@ async function checkBreakingNews() {
                 const newsMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                                 `📰 <b>FLAŞ HABER RADARI | #${matchedCoin}</b>\n\n` +
                                 `📢 <b>Başlık:</b> ${title}\n\n` +
-                                `⚠️ <b>Etki:</b> Listemizdeki parite üzerinde ani volatilite ve hacim patlaması bekleniyor. Açık scalp işlemlerinde stop mesafelerine dikkat edin!\n\n` +
+                                `⚠️ <b>Etki:</b> Paritede volatilite ve hacim patlaması bekleniyor. Açık işlemlerde stop mesafelerine dikkat edin!\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(newsMsg);
                 await sleep(1500);
@@ -168,14 +160,14 @@ async function checkBreakingNews() {
                 const isPump = lowerTitle.includes('surge') || lowerTitle.includes('pump') || lowerTitle.includes('skyrocket') || lowerTitle.includes('ath') || lowerTitle.includes('approval');
 
                 let directionNote = "Piyasada sert dalgalanma riski yüksek.";
-                if (isPanic) directionNote = "📉 Piyasa genelinde sert satış (DUMP) riski var!";
-                if (isPump) directionNote = "🚀 Piyasa genelinde ani yukarı patlama (PUMP) potansiyeli!";
+                if (isPanic) directionNote = "📉 Sert satış (DUMP) riski var!";
+                if (isPump) directionNote = "🚀 Ani yukarı patlama (PUMP) potansiyeli!";
 
                 const macroMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                                  `🚨 <b>PİYASA GENELİ SICAK GELİŞME (BTC / MAKRO)</b>\n\n` +
                                  `📢 <b>Haber:</b> ${title}\n\n` +
                                  `⚡ <b>Olası Etki:</b> ${directionNote}\n` +
-                                 `🛑 Bot volatiliteyi algıladığında ters yönlü scalp işlemlerini otomatik olarak kitleyecektir.\n\n` +
+                                 `🛑 Volatilite durumunda ters işlemler kilitlenecektir.\n\n` +
                                  `⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(macroMsg);
                 await sleep(1500);
@@ -408,34 +400,60 @@ async function scanMarket() {
 
             let signal = null;
 
+            // SHORT Kontrolü
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
             if (rsi1m >= config.rsiShort && touchedUpper && hasUpperRejection && volMultiplier >= config.minVolMultiplier && rsi1h <= 66 && btc.btcTrend !== "PUMP") {
                 const highestPoint = Math.max(highPrice, prevHigh);
-                const sl = (highestPoint * 1.0025).toFixed(4);
-                const tp = bb.middle.toFixed(4);
-                signal = {
-                    type: "🔴 SHORT SCALP",
-                    sl,
-                    tp,
-                    reason: `Bant Reddi / Tepe Fitili, Hacim ${volMultiplier}x (${config.sessionName})`
-                };
+                const sl = highestPoint * 1.0035;
+                const riskDist = sl - currentPrice;
+
+                // Hedefler: TP1 = 1.5R, TP2 = 2.5R (veya Alt Bant)
+                const tp1 = currentPrice - (riskDist * 1.5);
+                const tp2 = Math.min(bb.lower, currentPrice - (riskDist * 2.5));
+
+                const profitPercentTP1 = ((currentPrice - tp1) / currentPrice) * 100;
+
+                // En az %0.50 kâr potansiyeli olmayan küçük marjları ele
+                if (profitPercentTP1 >= 0.50) {
+                    signal = {
+                        type: "🔴 SHORT SCALP",
+                        sl: sl.toFixed(4),
+                        tp1: tp1.toFixed(4),
+                        tp2: tp2.toFixed(4),
+                        tp1Pct: profitPercentTP1.toFixed(2),
+                        reason: `Bant Reddi / Tepe Fitili, Hacim ${volMultiplier}x (${config.sessionName})`
+                    };
+                }
             }
 
+            // LONG Kontrolü
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
             if (rsi1m <= config.rsiLong && touchedLower && hasLowerRejection && volMultiplier >= config.minVolMultiplier && rsi1h >= 34 && btc.btcTrend !== "DUMP") {
                 const lowestPoint = Math.min(lowPrice, prevLow);
-                const sl = (lowestPoint * 0.9975).toFixed(4);
-                const tp = bb.middle.toFixed(4);
-                signal = {
-                    type: "🟢 LONG SCALP",
-                    sl,
-                    tp,
-                    reason: `Dip Tepkisi / Destek Fitili, Hacim ${volMultiplier}x (${config.sessionName})`
-                };
+                const sl = lowestPoint * 0.9965;
+                const riskDist = currentPrice - sl;
+
+                // Hedefler: TP1 = 1.5R, TP2 = 2.5R (veya Üst Bant)
+                const tp1 = currentPrice + (riskDist * 1.5);
+                const tp2 = Math.max(bb.upper, currentPrice + (riskDist * 2.5));
+
+                const profitPercentTP1 = ((tp1 - currentPrice) / currentPrice) * 100;
+
+                // En az %0.50 kâr potansiyeli olmayan küçük marjları ele
+                if (profitPercentTP1 >= 0.50) {
+                    signal = {
+                        type: "🟢 LONG SCALP",
+                        sl: sl.toFixed(4),
+                        tp1: tp1.toFixed(4),
+                        tp2: tp2.toFixed(4),
+                        tp1Pct: profitPercentTP1.toFixed(2),
+                        reason: `Dip Tepkisi / Destek Fitili, Hacim ${volMultiplier}x (${config.sessionName})`
+                    };
+                }
             }
 
             if (signal) {
@@ -449,8 +467,10 @@ async function scanMarket() {
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
                             `🎯 <b>Yön:</b> ${signal.type}\n` +
                             `💵 <b>Giriş Fiyatı:</b> $${currentPrice}\n` +
-                            `🛑 <b>Önerilen Stop:</b> $${signal.sl}\n` +
-                            `🎯 <b>Hedef Kâr (TP):</b> $${signal.tp}\n\n` +
+                            `🛑 <b>Önerilen Stop:</b> $${signal.sl}\n\n` +
+                            `🎯 <b>Kademeli Kâr Hedefleri:</b>\n` +
+                            `• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n` +
+                            `• <b>TP2 (Ana Hedef / Trend):</b> $${signal.tp2}\n\n` +
                             `📊 <b>Filtre Teyitleri:</b>\n` +
                             `• Aktif Seans: ${config.sessionName}\n` +
                             `• BTC 3dk Değişim: %${btc.change3m} (Stabil)\n` +
