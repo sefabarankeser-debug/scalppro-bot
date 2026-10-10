@@ -270,7 +270,10 @@ function calculateRSI(klines, period = 14) {
         }
     }
     if (avgLoss === 0) return 100;
-    return Math.round(100 - (100 / (1 + (avgGain / avgLoss))));
+    if (avgGain === 0) return 0;
+    const rs = avgGain / avgLoss;
+    const rsi = Math.round(100 - (100 / (1 + rs)));
+    return Math.max(0, Math.min(100, rsi));
 }
 
 function calculateBollinger(klines, period = 20, multiplier = 2) {
@@ -419,9 +422,7 @@ async function scanMarket() {
 
             let signal = null;
 
-            // --- 1. STRATEJİ VERİLERİNİN DENETİMİ (SCALP ALGORİTMASI) ---
-
-            // SHORT Kuralları
+            // SHORT: 2R ve 3.5R kâr hedefleri
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
@@ -430,12 +431,12 @@ async function scanMarket() {
                 const sl = highestPoint * 1.0035;
                 const riskDist = sl - currentPrice;
 
-                const tp1 = currentPrice - (riskDist * 1.5);
-                const tp2 = Math.min(bb.lower, currentPrice - (riskDist * 2.5));
+                const tp1 = currentPrice - (riskDist * 2.0);
+                const tp2 = Math.min(bb.lower, currentPrice - (riskDist * 3.5));
 
                 const profitPercentTP1 = ((currentPrice - tp1) / currentPrice) * 100;
 
-                if (profitPercentTP1 >= 0.45) {
+                if (profitPercentTP1 >= 0.75) {
                     signal = {
                         type: "🔴 SHORT SCALP",
                         sl: formatPrice(sl, currentPrice),
@@ -447,7 +448,7 @@ async function scanMarket() {
                 }
             }
 
-            // LONG Kuralları
+            // LONG: 2R ve 3.5R kâr hedefleri
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
@@ -456,12 +457,12 @@ async function scanMarket() {
                 const sl = lowestPoint * 0.9965;
                 const riskDist = currentPrice - sl;
 
-                const tp1 = currentPrice + (riskDist * 1.5);
+                const tp1 = currentPrice + (riskDist * 2.0);
                 const tp2 = Math.max(bb.upper, currentPrice + (riskDist * 2.5));
 
                 const profitPercentTP1 = ((tp1 - currentPrice) / currentPrice) * 100;
 
-                if (profitPercentTP1 >= 0.45) {
+                if (profitPercentTP1 >= 0.75) {
                     signal = {
                         type: "🟢 LONG SCALP",
                         sl: formatPrice(sl, currentPrice),
@@ -473,13 +474,12 @@ async function scanMarket() {
                 }
             }
 
-            // --- 2. ANLIK PUMP / DUMP DURUMU (VERİ TUTMUYORSA SADECE BİLGİ VERİR) ---
+            // ANLIK PUMP/DUMP RADARI (Veri kuralları tutmuyorsa SADECE BİLGİ VERİR)
             const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
             const isSpike = Math.abs(candleChange) >= 1.0;
             const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
 
             if (isSpike && (now - lastSpikeTime >= 4 * 60 * 1000)) {
-                // Eğer strateji kuralları bu patlamada teyit VERMEDİYSE: Sadece bilgi bildirimi geç
                 if (!signal) {
                     const isPump = candleChange > 0;
                     const changeIcon = isPump ? "🟢" : "🔴";
@@ -497,7 +497,7 @@ async function scanMarket() {
                 }
             }
 
-            // --- 3. KURALLAR TAM TUTUYORSA: TP/STOP'LU RESMİ SCALP SİNYALİ GÖNDER ---
+            // ONAYLI KESKİN SCALP SİNYALİ
             const lastAlertTime = alertedCoins.get(sym) || 0;
             if (signal && (now - lastAlertTime >= 15 * 60 * 1000)) {
                 const wallInfo = await fetchOrderBookWall(sym, config.wallThreshold);
