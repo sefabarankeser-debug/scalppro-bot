@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro Global Market Sessions Active\n');
+    res.end('ScalpPro Global Market Sessions & News Radar Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -20,7 +20,9 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAE4xogVFRIqIjP
 const CHAT_ID = process.env.CHAT_ID || "-1004412694884";
 
 const alertedCoins = new Map();
+const processedNewsIds = new Set();
 let lastStatusReportTime = 0;
+let lastNewsCheckTime = 0;
 
 let lastNotifiedEvents = {
     date: "",
@@ -38,6 +40,12 @@ const TARGET_COINS = [
     "ORDIUSDT", "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT",
     "JUPUSDT", "ENAUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT",
     "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT"
+];
+
+// Kritik makro ve genel piyasa sarsıcı anahtar kelimeler
+const CRITICAL_KEYWORDS = [
+    "sec", "fed", "powell", "binance", "tether", "etf", "interest rate",
+    "inflation", "cpi", "hack", "liquidation", "ban", "lawsuit", "court", "war", "tariff"
 ];
 
 const headers = {
@@ -100,6 +108,81 @@ async function sendTelegramMessage(text) {
         }
     } catch (e) {
         console.error("🔴 Telegram Ağ Hatası:", e.message);
+    }
+}
+
+// Haber Radarı: Kripto geneli sert kırılım ve 40 coin haberleri
+async function checkBreakingNews() {
+    try {
+        const now = Date.now();
+        // 2 dakikada birden sık sorgulama yapıp servisi yormayalım
+        if (now - lastNewsCheckTime < 2 * 60 * 1000) return;
+        lastNewsCheckTime = now;
+
+        const res = await fetch('https://cryptopanic.com/api/free/v1/posts/?public=true', { headers });
+        const data = await res.json();
+
+        if (!data || !data.results || !Array.isArray(data.results)) return;
+
+        // En son gelen 6 haberi incele
+        for (const item of data.results.slice(0, 6)) {
+            const newsId = item.id.toString();
+            if (processedNewsIds.has(newsId)) continue;
+            processedNewsIds.add(newsId);
+
+            // Hafızanın şişmemesi için en eski id'leri temizle
+            if (processedNewsIds.size > 200) {
+                const firstKey = processedNewsIds.values().next().value;
+                processedNewsIds.delete(firstKey);
+            }
+
+            const title = (item.title || "").trim();
+            const lowerTitle = title.toLowerCase();
+
+            // 1. Durum: Listemizdeki coinlerden birine ait mi?
+            let matchedCoin = null;
+            for (const sym of TARGET_COINS) {
+                const clean = sym.replace('USDT', '').replace('1000', '');
+                // Başlıkta tam kelime olarak coin ismi geçiyor mu?
+                const regex = new RegExp(`\\b${clean}\\b`, 'i');
+                if (regex.test(lowerTitle)) {
+                    matchedCoin = clean;
+                    break;
+                }
+            }
+
+            // 2. Durum: BTC veya piyasayı sert sarsacak makro bir haber mi?
+            const isMacroOrBtc = lowerTitle.includes('bitcoin') || lowerTitle.includes('btc') ||
+                                 CRITICAL_KEYWORDS.some(kw => lowerTitle.includes(kw));
+
+            if (matchedCoin) {
+                const newsMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                                `📰 <b>FLAŞ HABER RADARI | #${matchedCoin}</b>\n\n` +
+                                `📢 <b>Başlık:</b> ${title}\n\n` +
+                                `⚠️ <b>Etki:</b> Listemizdeki parite üzerinde ani volatilite ve hacim patlaması bekleniyor. Açık scalp işlemlerinde stop mesafelerine dikkat edin!\n\n` +
+                                `⚠️ <i>"YTD" HEPSİ.</i>`;
+                await sendTelegramMessage(newsMsg);
+                await sleep(1500);
+            } else if (isMacroOrBtc) {
+                const isPanic = lowerTitle.includes('dump') || lowerTitle.includes('crash') || lowerTitle.includes('drop') || lowerTitle.includes('fall') || lowerTitle.includes('hack') || lowerTitle.includes('ban');
+                const isPump = lowerTitle.includes('surge') || lowerTitle.includes('pump') || lowerTitle.includes('skyrocket') || lowerTitle.includes('ath') || lowerTitle.includes('approval');
+
+                let directionNote = "Piyasada sert dalgalanma riski yüksek.";
+                if (isPanic) directionNote = "📉 Piyasa genelinde sert satış (DUMP) riski var!";
+                if (isPump) directionNote = "🚀 Piyasa genelinde ani yukarı patlama (PUMP) potansiyeli!";
+
+                const macroMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                                 `🚨 <b>PİYASA GENELİ SICAK GELİŞME (BTC / MAKRO)</b>\n\n` +
+                                 `📢 <b>Haber:</b> ${title}\n\n` +
+                                 `⚡ <b>Olası Etki:</b> ${directionNote}\n` +
+                                 `🛑 Bot volatiliteyi algıladığında ters yönlü scalp işlemlerini otomatik olarak kitleyecektir.\n\n` +
+                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
+                await sendTelegramMessage(macroMsg);
+                await sleep(1500);
+            }
+        }
+    } catch (e) {
+        console.error("Haber servisi okuma hatası:", e.message);
     }
 }
 
@@ -294,6 +377,7 @@ async function fetchAnalysis(symbol) {
 async function scanMarket() {
     try {
         await checkSessionAlerts();
+        await checkBreakingNews();
 
         const config = getMarketParameters();
         console.log(`Piyasa taranıyor [${config.sessionName}]...`, new Date().toLocaleTimeString('tr-TR'));
