@@ -11,7 +11,7 @@ const http = require('http');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ScalpPro 40-Coin Dedicated Engine Active\n');
+    res.end('ScalpPro 40-Coin Dedicated Engine with Live Tracking Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -21,6 +21,7 @@ const CHAT_ID = process.env.CHAT_ID || "-1004412694884";
 
 const alertedCoins = new Map();
 const spikeAlertedCoins = new Map();
+const activeTrades = new Map(); // Canlı takip edilen aktif sinyaller
 const processedNewsIds = new Set();
 let lastStatusReportTime = 0;
 let lastNewsCheckTime = 0;
@@ -389,6 +390,114 @@ async function fetchAnalysis(symbol) {
     }
 }
 
+// CANLI POZİSYON VE HEDEF/STOP TAKİP RADARI
+async function checkActiveTrades(symbol, currentPrice, highPrice, lowPrice) {
+    const trade = activeTrades.get(symbol);
+    if (!trade) return;
+
+    const cleanSymbol = symbol.replace('USDT', '');
+    const nowTime = getTurkishTimeString();
+
+    // 1. LONG POZİSYONUN TAKİBİ
+    if (trade.side === 'LONG') {
+        // Stop Oldu mu? (❌)
+        if (lowPrice <= trade.sl) {
+            const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
+            const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
+                            `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
+                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                            `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı. Şeffaf istatistik takibi.</i>\n` +
+                            `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(stopMsg);
+            activeTrades.delete(symbol);
+            return;
+        }
+
+        // TP2 Geldi mi? (✅✅)
+        if (highPrice >= trade.tp2) {
+            const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
+            const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
+                           `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
+                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                           `🎯 <b>TP2 Fiyatı:</b> $${formatPrice(trade.tp2, trade.entry)}\n` +
+                           `🚀 <b>Net Kazanç:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
+                           `🎉 <i>Tebrikler! Pozisyon tamamen kârla kapatıldı.</i>\n` +
+                           `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(tp2Msg);
+            activeTrades.delete(symbol);
+            return;
+        }
+
+        // TP1 Geldi mi? (✅)
+        if (!trade.tp1Hit && highPrice >= trade.tp1) {
+            trade.tp1Hit = true;
+            trade.sl = trade.entry; // Riski sıfırla (Stopu girişe çek)
+            const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
+            const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
+                           `🎯 <b>Yön:</b> 🟢 LONG SCALP\n` +
+                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                           `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
+                           `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
+                           `🛡️ <b>ÖNEMLİ KURAL:</b> Stop noktanız otomatik olarak <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Artık bu işlemde risk sıfırdır!\n` +
+                           `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(tp1Msg);
+        }
+    }
+
+    // 2. SHORT POZİSYONUN TAKİBİ
+    if (trade.side === 'SHORT') {
+        // Stop Oldu mu? (❌)
+        if (highPrice >= trade.sl) {
+            const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
+            const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
+                            `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
+                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                            `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı. Şeffaf istatistik takibi.</i>\n` +
+                            `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(stopMsg);
+            activeTrades.delete(symbol);
+            return;
+        }
+
+        // TP2 Geldi mi? (✅✅)
+        if (lowPrice <= trade.tp2) {
+            const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
+            const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
+                           `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
+                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                           `🎯 <b>TP2 Fiyatı:</b> $${formatPrice(trade.tp2, trade.entry)}\n` +
+                           `🚀 <b>Net Kazanç:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
+                           `🎉 <i>Tebrikler! Pozisyon tamamen kârla kapatıldı.</i>\n` +
+                           `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(tp2Msg);
+            activeTrades.delete(symbol);
+            return;
+        }
+
+        // TP1 Geldi mi? (✅)
+        if (!trade.tp1Hit && lowPrice <= trade.tp1) {
+            trade.tp1Hit = true;
+            trade.sl = trade.entry; // Riski sıfırla (Stopu girişe çek)
+            const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
+            const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
+                           `🎯 <b>Yön:</b> 🔴 SHORT SCALP\n` +
+                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
+                           `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
+                           `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
+                           `🛡️ <b>ÖNEMLİ KURAL:</b> Stop noktanız otomatik olarak <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Artık bu işlemde risk sıfırdır!\n` +
+                           `⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(tp1Msg);
+        }
+    }
+
+    // 2 saat boyunca ne stop ne TP olmadıysa bellekten düşür
+    if (Date.now() - trade.time > 2 * 60 * 60 * 1000) {
+        activeTrades.delete(symbol);
+    }
+}
+
 async function scanMarket() {
     try {
         await checkSessionAlerts();
@@ -416,6 +525,9 @@ async function scanMarket() {
                 prevHigh, prevLow, rsi1m, rsi1h, bb, volMultiplier
             } = data;
 
+            // Önce canlı takipteki açık pozisyonları kontrol et (✅ / ❌ kontrolü)
+            await checkActiveTrades(sym, currentPrice, highPrice, lowPrice);
+
             const now = Date.now();
             const cleanSymbol = sym.replace('USDT', '');
             const binanceUrl = `https://www.binance.com/tr/futures/${sym}`;
@@ -439,6 +551,10 @@ async function scanMarket() {
                 if (profitPercentTP1 >= 0.75) {
                     signal = {
                         type: "🔴 SHORT SCALP",
+                        rawEntry: currentPrice,
+                        rawSl: sl,
+                        rawTp1: tp1,
+                        rawTp2: tp2,
                         sl: formatPrice(sl, currentPrice),
                         tp1: formatPrice(tp1, currentPrice),
                         tp2: formatPrice(tp2, currentPrice),
@@ -465,6 +581,10 @@ async function scanMarket() {
                 if (profitPercentTP1 >= 0.75) {
                     signal = {
                         type: "🟢 LONG SCALP",
+                        rawEntry: currentPrice,
+                        rawSl: sl,
+                        rawTp1: tp1,
+                        rawTp2: tp2,
                         sl: formatPrice(sl, currentPrice),
                         tp1: formatPrice(tp1, currentPrice),
                         tp2: formatPrice(tp2, currentPrice),
@@ -474,13 +594,13 @@ async function scanMarket() {
                 }
             }
 
-            // ANLIK PUMP/DUMP RADARI (Veri kuralları tutmuyorsa SADECE BİLGİ VERİR)
+            // ANLIK PUMP/DUMP BİLGİLENDİRMESİ (Veriler uymuyorsa)
             const candleChange = ((currentPrice - openPrice) / openPrice) * 100;
             const isSpike = Math.abs(candleChange) >= 1.0;
             const lastSpikeTime = spikeAlertedCoins.get(sym) || 0;
 
             if (isSpike && (now - lastSpikeTime >= 4 * 60 * 1000)) {
-                if (!signal) {
+                if (!signal && !activeTrades.has(sym)) {
                     const isPump = candleChange > 0;
                     const changeIcon = isPump ? "🟢" : "🔴";
 
@@ -497,9 +617,9 @@ async function scanMarket() {
                 }
             }
 
-            // ONAYLI KESKİN SCALP SİNYALİ
+            // YENİ SCALP SİNYALİ VERME
             const lastAlertTime = alertedCoins.get(sym) || 0;
-            if (signal && (now - lastAlertTime >= 15 * 60 * 1000)) {
+            if (signal && !activeTrades.has(sym) && (now - lastAlertTime >= 15 * 60 * 1000)) {
                 const wallInfo = await fetchOrderBookWall(sym, config.wallThreshold);
                 const wallText = wallInfo ? `\n${wallInfo}` : '';
 
@@ -524,6 +644,18 @@ async function scanMarket() {
 
                 await sendTelegramMessage(msg);
                 alertedCoins.set(sym, now);
+
+                // İşlemi canlı takip listesine kaydet
+                activeTrades.set(sym, {
+                    side: signal.type.includes('LONG') ? 'LONG' : 'SHORT',
+                    entry: signal.rawEntry,
+                    sl: signal.rawSl,
+                    tp1: signal.rawTp1,
+                    tp2: signal.rawTp2,
+                    tp1Hit: false,
+                    time: now
+                });
+
                 signalSentInThisCycle = true;
             }
         }
