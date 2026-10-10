@@ -17,12 +17,11 @@ http.createServer((req, res) => {
 });
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
-const CHAT_ID = process.env.CHAT_ID || "956236479";
+const CHAT_ID = process.env.CHAT_ID || "-1004412694884";
 
 const alertedCoins = new Map();
 let lastStatusReportTime = 0;
 
-// Seans bildirimlerinin günde sadece 1 kez atılması için hafıza takibi
 let lastNotifiedEvents = {
     date: "",
     approachingNY: false,
@@ -97,21 +96,19 @@ async function sendTelegramMessage(text) {
         if (!data.ok) {
             console.error("🔴 Telegram Gönderim Hatası:", data.description);
         } else {
-            console.log("🟢 Telegram mesajı başarıyla iletildi.");
+            console.log("🟢 Telegram mesajı kanala iletildi.");
         }
     } catch (e) {
         console.error("🔴 Telegram Ağ Hatası:", e.message);
     }
 }
 
-// Kritik Seans Zamanlarını Denetleyen ve Özel Uyarı Gönderen Fonksiyon
 async function checkSessionAlerts() {
     const now = new Date();
     const trHour = (now.getUTCHours() + 3) % 24;
     const trMinute = now.getUTCMinutes();
     const todayStr = now.toISOString().slice(0, 10);
 
-    // Gün değiştiğinde bildirim kilitlerini sıfırla
     if (lastNotifiedEvents.date !== todayStr) {
         lastNotifiedEvents = {
             date: todayStr,
@@ -121,7 +118,6 @@ async function checkSessionAlerts() {
         };
     }
 
-    // 1. 16:00 TSİ: New York Seansına 30 Dk Kaldı Uyarısı
     if (trHour === 16 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.approachingNY) {
         const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                     `⏳ <b>DİKKAT: EN HAREKETLİ SEANSA 30 DAKİKA KALDI!</b>\n\n` +
@@ -134,7 +130,6 @@ async function checkSessionAlerts() {
         lastNotifiedEvents.approachingNY = true;
     }
 
-    // 2. 16:30 TSİ: New York Seansı Resmen Açıldı Uyarısı
     if (trHour === 16 && trMinute >= 30 && trMinute < 40 && !lastNotifiedEvents.openNY) {
         const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                     `🔥 <b>NEW YORK (WALL STREET) SEANSI RESMEN AÇILDI!</b>\n\n` +
@@ -147,7 +142,6 @@ async function checkSessionAlerts() {
         lastNotifiedEvents.openNY = true;
     }
 
-    // 3. 23:00 TSİ: New York Seansı Kapandı Uyarısı
     if (trHour === 23 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.closeNY) {
         const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                     `🌙 <b>NEW YORK SEANSI KAPANDI (PİYASA SAKİNLEŞİYOR)</b>\n\n` +
@@ -299,7 +293,6 @@ async function fetchAnalysis(symbol) {
 
 async function scanMarket() {
     try {
-        // Seans açılış/kapanış bildirim kontrolü
         await checkSessionAlerts();
 
         const config = getMarketParameters();
@@ -331,7 +324,6 @@ async function scanMarket() {
 
             let signal = null;
 
-            // SHORT Kuralı
             const touchedUpper = highPrice >= bb.upper * 0.999 || prevHigh >= bb.upper * 0.999;
             const hasUpperRejection = (currentPrice < highPrice) || (currentPrice < openPrice);
 
@@ -347,7 +339,6 @@ async function scanMarket() {
                 };
             }
 
-            // LONG Kuralı
             const touchedLower = lowPrice <= bb.lower * 1.001 || prevLow <= bb.lower * 1.001;
             const hasLowerRejection = (currentPrice > lowPrice) || (currentPrice > openPrice);
 
