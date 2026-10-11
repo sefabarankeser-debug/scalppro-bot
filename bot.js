@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro 4H-Trend + 15M-Trigger + Strict Filter Active\n');
+    res.end('ScalpPro 4H-Trend + 15M-Trigger + Interactive Commands Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -26,6 +26,7 @@ const CHAT_ID = "-1004412694884";
 // ==========================================
 // 2. HAFIZA & DEĞİŞKENLER
 // ==========================================
+let lastUpdateId = 0; // Telegram mesaj dinleyici için
 const alertedCoins = new Map();
 const activeTrades = new Map();
 const processedNewsIds = new Set();
@@ -133,7 +134,7 @@ function getActiveSessionName() {
 }
 
 // ==========================================
-// 3. API & İLETİŞİM MOTORLARI
+// 3. API & TELEGRAM İLETİŞİM MOTORLARI
 // ==========================================
 function fetchJSON(url, customHeaders = {}) {
     return new Promise((resolve, reject) => {
@@ -152,15 +153,17 @@ function fetchJSON(url, customHeaders = {}) {
     });
 }
 
-function sendTelegramMessage(text) {
+function sendTelegramMessage(text, replyToId = null) {
     return new Promise((resolve) => {
-        const payload = JSON.stringify({
+        const payloadObj = {
             chat_id: CHAT_ID,
             text: text,
             parse_mode: 'HTML',
             disable_web_page_preview: true
-        });
+        };
+        if (replyToId) payloadObj.reply_to_message_id = replyToId;
 
+        const payload = JSON.stringify(payloadObj);
         const options = {
             hostname: 'api.telegram.org',
             port: 443,
@@ -587,7 +590,111 @@ async function checkSessionAlerts() {
 }
 
 // ==========================================
-// 8. MULTI-TIMEFRAME (4H + 15M) TARAMA MOTORU
+// 8. ÖZEL İSTEK (ON-DEMAND) ANALİZ MOTORU
+// ==========================================
+async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
+    let clean = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!clean.endsWith('USDT')) clean += 'USDT';
+
+    // 1000PEPE, 1000SHIB gibi türev pariteleri otomatik kontrol et
+    let symbol = clean;
+    let klines15m = await fetchBybitKlines(symbol, "15", 50);
+    if (!klines15m && !symbol.startsWith('1000')) {
+        symbol = '1000' + clean;
+        klines15m = await fetchBybitKlines(symbol, "15", 50);
+    }
+
+    if (!klines15m || klines15m.length < 30) {
+        await sendTelegramMessage(`⚠️ <b>#${clean}</b> için Bybit Futures verisi bulunamadı. Lütfen sembolü kontrol ediniz.`, replyToId);
+        return;
+    }
+
+    const klines4h = await fetchBybitKlines(symbol, "240", 60);
+    if (!klines4h || klines4h.length < 25) {
+        await sendTelegramMessage(`⚠️ <b>#${clean}</b> için 4 saatlik grafik verisi yetersiz.`, replyToId);
+        return;
+    }
+
+    const closes15 = klines15m.map(k => parseFloat(k[4]));
+    const currentPrice = closes15[closes15.length - 1];
+    const rsi15m = calculateRSI(closes15, 14);
+
+    const closes4h = klines4h.map(k => parseFloat(k[4]));
+    const rsi4h = calculateRSI(closes4h, 14);
+    const ema50_4h = calculateEMA(closes4h, 50) || calculateEMA(closes4h, 20);
+
+    let trendText = "⚪ Yatay / Kararsız";
+    if (currentPrice > ema50_4h && rsi4h >= 50) trendText = "🟢 Yükseliş Trendi (Boğa)";
+    else if (currentPrice < ema50_4h && rsi4h <= 50) trendText = "🔴 Düşüş Trendi (Ayı)";
+
+    const lsData = await fetchLongShortRatio(symbol);
+    const candleReportText = build4HCandleReport(klines4h);
+
+    let verdict = "⚪ Nötr / Bekle-Gör";
+    if (rsi15m <= 35 && currentPrice > ema50_4h && lsData.longPct < 65) {
+        verdict = "🟢 LONG Fırsat Bölgesi (4H Trend Destekli Dip)";
+    } else if (rsi15m >= 65 && currentPrice < ema50_4h && lsData.shortPct < 65) {
+        verdict = "🔴 SHORT Fırsat Bölgesi (4H Düşüş Destekli Tepe)";
+    } else if (lsData.longPct >= 65) {
+        verdict = "⚠️ Aşırı Long Yığılması (Likidasyon / Düşüş Riski)";
+    } else if (lsData.shortPct >= 65) {
+        verdict = "⚠️ Aşırı Short Yığılması (Squeeze / Pump Riski)";
+    }
+
+    const binanceUrl = `https://www.binance.com/tr/futures/${symbol}`;
+    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                      `🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n` +
+                      `💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
+                      `🧭 <b>4H Ana Trend:</b> ${trendText} (RSI: ${rsi4h})\n` +
+                      `⚡ <b>15dk RSI:</b> ${rsi15m}\n` +
+                      `🎯 <b>Sistem Değerlendirmesi:</b> <b>${verdict}</b>\n\n` +
+                      `${lsData.text}\n\n` +
+                      `${candleReportText}\n\n` +
+                      `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
+                      `⚠️ <i>"YTD" HEPSİ.</i>`;
+
+    await sendTelegramMessage(reportMsg, replyToId);
+}
+
+// Telegram mesajlarını yakalama motoru
+async function pollTelegramUpdates() {
+    try {
+        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=5`;
+        const res = await fetchJSON(url);
+
+        if (res.ok && Array.isArray(res.result)) {
+            for (const upd of res.result) {
+                lastUpdateId = upd.update_id;
+
+                const message = upd.message || upd.channel_post;
+                if (!message || !message.text) continue;
+
+                let txt = message.text.trim();
+                
+                // Örnek komutlar: "SOL", "/analiz SOL", "BTC analiz", "WLD"
+                let targetCoin = null;
+                if (txt.startsWith('/analiz')) {
+                    const parts = txt.split(' ');
+                    if (parts[1]) targetCoin = parts[1];
+                } else if (txt.length >= 2 && txt.length <= 12 && !txt.includes(' ') && !txt.startsWith('/')) {
+                    targetCoin = txt;
+                } else if (txt.toLowerCase().includes('analiz')) {
+                    const parts = txt.split(' ');
+                    targetCoin = parts[0] === 'analiz' ? parts[1] : parts[0];
+                }
+
+                if (targetCoin) {
+                    await analyzeSpecificCoin(targetCoin, message.message_id);
+                }
+            }
+        }
+    } catch (e) {
+        // Sessiz devam et
+    }
+}
+
+// ==========================================
+// 9. MULTI-TIMEFRAME (4H + 15M) TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -609,7 +716,6 @@ async function scanMarket() {
         let rsiNeutralCount = 0;
 
         for (const symbol of TARGET_COINS) {
-            // 1. 15 Dakikalık Veriyi Çek
             const klines15m = await fetchBybitKlines(symbol, "15", 50);
             await sleep(80);
 
@@ -638,7 +744,6 @@ async function scanMarket() {
                 continue;
             }
 
-            // 2. 4 Saatlik Veriyi Çek
             const klines4h = await fetchBybitKlines(symbol, "240", 60);
             await sleep(80);
 
@@ -652,7 +757,6 @@ async function scanMarket() {
             if (currentPrice > ema50_4h && rsi4h >= 50) mainTrend = "BULL";
             else if (currentPrice < ema50_4h && rsi4h <= 50) mainTrend = "BEAR";
 
-            // Son 2 adet 4 saatlik mumun yönünü kontrol et
             const last3_4h = klines4h.slice(-3);
             const m2_open = parseFloat(last3_4h[1][1]);
             const m2_close = parseFloat(last3_4h[1][4]);
@@ -664,12 +768,9 @@ async function scanMarket() {
             const m2_isGreen = m2_close > m2_open;
             const m3_isGreen = m3_close > m3_open;
 
-            // Son 2 mum arka arkaya kırmızıysa Long açılmaz!
             const twoConsecutiveReds = (m2_isRed && m3_isRed);
-            // Son 2 mum arka arkaya yeşilse Short açılmaz!
             const twoConsecutiveGreens = (m2_isGreen && m3_isGreen);
 
-            // Long / Short Oranını Çek ve Filtrele
             const lsData = await fetchLongShortRatio(symbol);
 
             const atr15 = calculateATR(highs15, lows15, closes15, 14);
@@ -679,9 +780,6 @@ async function scanMarket() {
 
             let signal = null;
 
-            // 🟢 LONG KURALI (Sıkı Filtreli):
-            // Şartlar: 15M Dip (RSI <= 35) + 4H Bull Trend + Alt Fitil + BTC Güvenli +
-            // Long Oranı <%65 (Tuzağa Düşme) + Son 2 4H mum kırmızı OLMAMALI!
             const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.35);
             if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && lsData.longPct < 65 && !twoConsecutiveReds) {
                 const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
@@ -703,9 +801,6 @@ async function scanMarket() {
                 };
             }
 
-            // 🔴 SHORT KURALI (Sıkı Filtreli):
-            // Şartlar: 15M Tepe (RSI >= 65) + 4H Bear Trend + Üst Fitil + BTC Güvenli +
-            // Short Oranı <%65 (Short Squeeze Olma) + Son 2 4H mum yeşil OLMAMALI!
             const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.35);
             if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && lsData.shortPct < 65 && !twoConsecutiveGreens) {
                 const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
@@ -731,7 +826,6 @@ async function scanMarket() {
                 trendBlockedCount++;
             }
 
-            // Sinyal Gönderimi
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (now - lastAlertTime >= 30 * 60 * 1000)) {
                 const candleReportText = build4HCandleReport(klines4h);
@@ -773,7 +867,6 @@ async function scanMarket() {
             }
         }
 
-        // 15 Dakikalık Durum Özeti
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 15 * 60 * 1000)) {
             const timeNow = getTurkishTimeString();
@@ -799,11 +892,21 @@ async function scanMarket() {
 }
 
 // ==========================================
-// 9. ANA ÇALIŞTIRICI
+// 10. ANA ÇALIŞTIRICI DÖNGÜSÜ
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Multi-TF + Sıkı L/S & Mum Filtresi Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Likidasyon tuzağı ve arka arkaya ters mum filtreleri devreye alındı.");
+    console.log("🚀 ScalpPro İnteraktif + Otomatik Tarama Motoru Başlatıldı...");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Artık kanala doğrudan <code>SOL</code>, <code>BTC</code> veya <code>WLD</code> yazdığınızda anlık analizi gönderilecektir.");
+
+    // Telegram dinleme döngüsü (Arka planda kesintisiz)
+    (async () => {
+        while (true) {
+            await pollTelegramUpdates();
+            await sleep(1500);
+        }
+    })();
+
+    // Piyasa tarama döngüsü
     while (true) {
         await scanMarket();
         await sleep(15000);
