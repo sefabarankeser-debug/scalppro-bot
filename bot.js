@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro 15M High-WinRate Engine Active\n');
+    res.end('ScalpPro 4H-Trend + 15M-Trigger Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -141,7 +141,7 @@ function getStatsText() {
         ? `• 🌐 <b>Son 12 Saat:</b> ${s12.tps} TP | ${s12.stops} Stop (<b>%${s12.winRate} Win Rate</b>)`
         : `• 🌐 <b>Son 12 Saat:</b> Henüz sonuçlanan işlem yok`;
 
-    return `📊 <b>Canlı Başarı Karnesi (15M):</b>\n${text1}\n${text12}`;
+    return `📊 <b>Canlı Başarı Karnesi (4H Trend + 15M):</b>\n${text1}\n${text12}`;
 }
 
 function getActiveSessionName() {
@@ -357,7 +357,7 @@ function calculateRSI(closes, period = 14) {
     return Math.round(100 - (100 / (1 + rs)));
 }
 
-function calculateEMA(closes, period = 200) {
+function calculateEMA(closes, period = 50) {
     if (!Array.isArray(closes) || closes.length < period) return null;
     const k = 2 / (period + 1);
     let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
@@ -383,11 +383,11 @@ function calculateATR(highs, lows, closes, period = 14) {
     return recentTrs.reduce((a, b) => a + b, 0) / period;
 }
 
-async function fetchBybitKlines15m(symbol) {
+async function fetchBybitKlines(symbol, interval, limit) {
     try {
-        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=15&limit=210`;
-        const json = await fetchJSON(url, { 'User-Agent': 'ScalpProBot/2.0' });
-        if (json.retCode !== 0 || !json.result || !json.result.list || json.result.list.length < 50) return null;
+        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`;
+        const json = await fetchJSON(url, { 'User-Agent': 'ScalpProMultiTF/3.0' });
+        if (json.retCode !== 0 || !json.result || !json.result.list || json.result.list.length < 20) return null;
         return json.result.list.slice().reverse();
     } catch (e) {
         return null;
@@ -395,7 +395,7 @@ async function fetchBybitKlines15m(symbol) {
 }
 
 async function checkBtcCondition() {
-    const list = await fetchBybitKlines15m("BTCUSDT");
+    const list = await fetchBybitKlines("BTCUSDT", "15", 30);
     if (!list || list.length < 3) return { safe: true, btcTrend: "NEUTRAL", change15m: "0.00" };
 
     const currentPrice = parseFloat(list[list.length - 1][4]);
@@ -427,12 +427,12 @@ async function checkActiveTrades(symbol, currentPrice) {
     if (trade.side === 'LONG') {
         if (!trade.tp1Hit && currentPrice >= trade.tp1) {
             trade.tp1Hit = true;
-            trade.sl = trade.entry;
+            trade.sl = trade.entry; // Başa baş stop
             tradeHistory.push({ type: 'TP', time: Date.now() });
 
             const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
             const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🟢 LONG (15dk Yüksek Win Rate)\n` +
+                           `🎯 <b>Yön:</b> 🟢 LONG (4H Trend Destekli)\n` +
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
                            `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
@@ -446,7 +446,7 @@ async function checkActiveTrades(symbol, currentPrice) {
             tradeHistory.push({ type: 'TP', time: Date.now() });
             const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
             const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🟢 LONG (15dk Yüksek Win Rate)\n` +
+                           `🎯 <b>Yön:</b> 🟢 LONG (4H Trend Destekli)\n` +
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP2 Fiyatı:</b> $${formatPrice(trade.tp2, trade.entry)}\n` +
                            `🚀 <b>Net Kazanç:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
@@ -462,7 +462,7 @@ async function checkActiveTrades(symbol, currentPrice) {
             tradeHistory.push({ type: 'STOP', time: Date.now() });
             const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
             const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
-                            `🎯 <b>Yön:</b> 🟢 LONG (15dk Yüksek Win Rate)\n` +
+                            `🎯 <b>Yön:</b> 🟢 LONG (4H Trend Destekli)\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
                             `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n\n` +
@@ -477,12 +477,12 @@ async function checkActiveTrades(symbol, currentPrice) {
     if (trade.side === 'SHORT') {
         if (!trade.tp1Hit && currentPrice <= trade.tp1) {
             trade.tp1Hit = true;
-            trade.sl = trade.entry;
+            trade.sl = trade.entry; // Başa baş stop
             tradeHistory.push({ type: 'TP', time: Date.now() });
 
             const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
             const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🔴 SHORT (15dk Yüksek Win Rate)\n` +
+                           `🎯 <b>Yön:</b> 🔴 SHORT (4H Trend Destekli)\n` +
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
                            `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
@@ -496,7 +496,7 @@ async function checkActiveTrades(symbol, currentPrice) {
             tradeHistory.push({ type: 'TP', time: Date.now() });
             const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
             const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🔴 SHORT (15dk Yüksek Win Rate)\n` +
+                           `🎯 <b>Yön:</b> 🔴 SHORT (4H Trend Destekli)\n` +
                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                            `🎯 <b>TP2 Fiyatı:</b> $${formatPrice(trade.tp2, trade.entry)}\n` +
                            `🚀 <b>Net Kazanç:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
@@ -512,7 +512,7 @@ async function checkActiveTrades(symbol, currentPrice) {
             tradeHistory.push({ type: 'STOP', time: Date.now() });
             const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
             const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
-                            `🎯 <b>Yön:</b> 🔴 SHORT (15dk Yüksek Win Rate)\n` +
+                            `🎯 <b>Yön:</b> 🔴 SHORT (4H Trend Destekli)\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
                             `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n\n` +
@@ -524,13 +524,13 @@ async function checkActiveTrades(symbol, currentPrice) {
         }
     }
 
-    if (Date.now() - trade.time > 4 * 60 * 60 * 1000) {
+    if (Date.now() - trade.time > 6 * 60 * 60 * 1000) {
         activeTrades.delete(symbol);
     }
 }
 
 // ==========================================
-// 7. 15 DAKİKALIK PROFESYONEL TARAMA DÖNGÜSÜ
+// 7. MULTI-TIMEFRAME (4H + 15M) TARAMA DÖNGÜSÜ
 // ==========================================
 async function scanMarket() {
     try {
@@ -538,7 +538,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const session = getActiveSessionName();
-        console.log(`55 Parite (15dk Yüksek Win Rate) taranıyor [${session}]...`, getTurkishTimeString());
+        console.log(`55 Parite (4H Trend + 15M Tetik) taranıyor [${session}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -550,95 +550,70 @@ async function scanMarket() {
         let scannedCount = 0;
         let trendBlockedCount = 0;
         let rsiNeutralCount = 0;
-        let lowVolumeCount = 0;
 
         for (const symbol of TARGET_COINS) {
-            const list = await fetchBybitKlines15m(symbol);
-            await sleep(120);
+            // Adım 1: 15 Dakikalık Mumları Çek
+            const klines15m = await fetchBybitKlines(symbol, "15", 50);
+            await sleep(80);
 
-            if (!list || list.length < 50) continue;
+            if (!klines15m || klines15m.length < 35) continue;
             scannedCount++;
 
-            const opens = list.map(k => parseFloat(k[1]));
-            const highs = list.map(k => parseFloat(k[2]));
-            const lows = list.map(k => parseFloat(k[3]));
-            const closes = list.map(k => parseFloat(k[4]));
-            const volumes = list.map(k => parseFloat(k[5]));
+            const opens15 = klines15m.map(k => parseFloat(k[1]));
+            const highs15 = klines15m.map(k => parseFloat(k[2]));
+            const lows15 = klines15m.map(k => parseFloat(k[3]));
+            const closes15 = klines15m.map(k => parseFloat(k[4]));
 
-            const currentPrice = closes[closes.length - 1];
-            const currentOpen = opens[opens.length - 1];
-            const currentHigh = highs[highs.length - 1];
-            const currentLow = lows[lows.length - 1];
-            const currentVol = volumes[volumes.length - 1];
+            const currentPrice = closes15[closes15.length - 1];
+            const currentOpen = opens15[opens15.length - 1];
+            const currentHigh = highs15[highs15.length - 1];
+            const currentLow = lows15[lows15.length - 1];
 
             await checkActiveTrades(symbol, currentPrice);
 
-            const rsi15m = calculateRSI(closes, 14);
-            const ema200 = calculateEMA(closes, 200) || calculateEMA(closes, 50);
-            const atr = calculateATR(highs, lows, closes, 14);
+            const rsi15m = calculateRSI(closes15, 14);
 
-            const avgVol = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
-            const volMultiplier = avgVol > 0 ? (currentVol / avgVol).toFixed(1) : "1.0";
-            const hasVolumeSpike = currentVol >= avgVol * 1.35;
+            // Eğer 15m RSI aşırı bölgede değilse 4H verisini çekmeye gerek yok (API kotasını korur)
+            const isPotentialLong = (rsi15m <= 35);
+            const isPotentialShort = (rsi15m >= 65);
 
+            if (!isPotentialLong && !isPotentialShort) {
+                rsiNeutralCount++;
+                continue;
+            }
+
+            // Adım 2: 4 Saatlik Ana Trendi Doğrula (interval=240)
+            const klines4h = await fetchBybitKlines(symbol, "240", 60);
+            await sleep(80);
+
+            if (!klines4h || klines4h.length < 25) continue;
+
+            const closes4h = klines4h.map(k => parseFloat(k[4]));
+            const rsi4h = calculateRSI(closes4h, 14);
+            const ema50_4h = calculateEMA(closes4h, 50) || calculateEMA(closes4h, 20);
+
+            let mainTrend = "NEUTRAL";
+            if (currentPrice > ema50_4h && rsi4h >= 50) mainTrend = "BULL";
+            else if (currentPrice < ema50_4h && rsi4h <= 50) mainTrend = "BEAR";
+
+            const atr15 = calculateATR(highs15, lows15, closes15, 14);
             const now = Date.now();
             const cleanSymbol = symbol.replace('USDT', '');
             const binanceUrl = `https://www.binance.com/tr/futures/${symbol}`;
 
             let signal = null;
 
-            // SHORT KRİTERİ:
-            // 1. RSI >= 75
-            // 2. Fiyat EMA 200'ün altında (Ana Düşüş Trendi Teyidi)
-            // 3. Tepe Satış Fitili (Fiyat güncel tepe noktasından geri çekilmiş olmalı)
-            // 4. Hacim Tükenişi (En az 1.35x hacim)
-            // 5. BTC Pump yapmıyor olmalı
-            const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.4);
-            const isShort = (rsi15m >= 75) &&
-                            (ema200 ? currentPrice <= ema200 * 1.015 : true) &&
-                            (hasUpperWick || currentPrice < currentHigh) &&
-                            hasVolumeSpike &&
-                            (btc.btcTrend !== "PUMP");
-
-            // LONG KRİTERİ:
-            // 1. RSI <= 25
-            // 2. Fiyat EMA 200'ün üzerinde (Ana Yükseliş Trendi Teyidi)
-            // 3. Dip Alış Fitili (Fiyat güncel dip noktasından yukarı tepki vermiş olmalı)
-            // 4. Hacim Tükenişi (En az 1.35x hacim)
-            // 5. BTC Dump yapmıyor olmalı
-            const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.4);
-            const isLong = (rsi15m <= 25) &&
-                           (ema200 ? currentPrice >= ema200 * 0.985 : true) &&
-                           (hasLowerWick || currentPrice > currentLow) &&
-                           hasVolumeSpike &&
-                           (btc.btcTrend !== "DUMP");
-
-            if (isShort) {
-                const stopDist = atr ? Math.max(atr * 1.6, currentPrice * 0.012) : currentPrice * 0.015;
-                const sl = currentPrice + stopDist;
-                const tp1 = currentPrice - (stopDist * 1.25);
-                const tp2 = currentPrice - (stopDist * 2.50);
-
-                signal = {
-                    type: "🔴 SHORT (15dk Pro Setup)",
-                    rawEntry: currentPrice,
-                    rawSl: sl,
-                    rawTp1: tp1,
-                    rawTp2: tp2,
-                    sl: formatPrice(sl, currentPrice),
-                    tp1: formatPrice(tp1, currentPrice),
-                    tp2: formatPrice(tp2, currentPrice),
-                    tp1Pct: (((currentPrice - tp1) / currentPrice) * 100).toFixed(2),
-                    reason: `15dk Tepe Fitili Onayı, ${volMultiplier}x Hacim Climax, EMA Trend Teyidi`
-                };
-            } else if (isLong) {
-                const stopDist = atr ? Math.max(atr * 1.6, currentPrice * 0.012) : currentPrice * 0.015;
+            // 🟢 LONG KURALI:
+            // 4 Saatlik Ana Trend BULL iken, 15 Dakikalıkta Düzeltme (RSI <= 35) + Dip Fitili Reaksiyonu
+            const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.35);
+            if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP") {
+                const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
                 const sl = currentPrice - stopDist;
-                const tp1 = currentPrice + (stopDist * 1.25);
-                const tp2 = currentPrice + (stopDist * 2.50);
+                const tp1 = currentPrice + (stopDist * 1.3);
+                const tp2 = currentPrice + (stopDist * 2.6);
 
                 signal = {
-                    type: "🟢 LONG (15dk Pro Setup)",
+                    type: "🟢 LONG (4H Trend + 15M Düzeltme)",
                     rawEntry: currentPrice,
                     rawSl: sl,
                     rawTp1: tp1,
@@ -647,19 +622,42 @@ async function scanMarket() {
                     tp1: formatPrice(tp1, currentPrice),
                     tp2: formatPrice(tp2, currentPrice),
                     tp1Pct: (((tp1 - currentPrice) / currentPrice) * 100).toFixed(2),
-                    reason: `15dk Dip Fitili Onayı, ${volMultiplier}x Hacim Climax, EMA Trend Teyidi`
+                    reason: `4H Ana Trend Yükseliş (RSI: ${rsi4h}), 15M Sağlıklı Dip Testi (RSI: ${rsi15m})`
                 };
-            } else {
-                if (rsi15m > 25 && rsi15m < 75) rsiNeutralCount++;
-                else if (!hasVolumeSpike) lowVolumeCount++;
-                else trendBlockedCount++;
+            }
+
+            // 🔴 SHORT KURALI:
+            // 4 Saatlik Ana Trend BEAR iken, 15 Dakikalıkta Tepki (RSI >= 65) + Tepe Fitili Reaksiyonu
+            const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.35);
+            if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP") {
+                const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
+                const sl = currentPrice + stopDist;
+                const tp1 = currentPrice - (stopDist * 1.3);
+                const tp2 = currentPrice - (stopDist * 2.6);
+
+                signal = {
+                    type: "🔴 SHORT (4H Trend + 15M Tepki Tepesi)",
+                    rawEntry: currentPrice,
+                    rawSl: sl,
+                    rawTp1: tp1,
+                    rawTp2: tp2,
+                    sl: formatPrice(sl, currentPrice),
+                    tp1: formatPrice(tp1, currentPrice),
+                    tp2: formatPrice(tp2, currentPrice),
+                    tp1Pct: (((currentPrice - tp1) / currentPrice) * 100).toFixed(2),
+                    reason: `4H Ana Trend Düşüş (RSI: ${rsi4h}), 15M Aşırı Tepki Tepesi (RSI: ${rsi15m})`
+                };
+            }
+
+            if (!signal && (isPotentialLong || isPotentialShort)) {
+                trendBlockedCount++;
             }
 
             // Sinyal İletimi
             const lastAlertTime = alertedCoins.get(symbol) || 0;
-            if (signal && !activeTrades.has(symbol) && (now - lastAlertTime >= 25 * 60 * 1000)) {
+            if (signal && !activeTrades.has(symbol) && (now - lastAlertTime >= 30 * 60 * 1000)) {
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                            `🎯 <b>15M YÜKSEK KALİTE SİNYALİ (PRO SETUP)</b> 🎯\n\n` +
+                            `🎯 <b>ÇİFT ZAMAN DİLİMLİ PRO SİNYAL (4H + 15M)</b> 🎯\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
                             `🎯 <b>Yön:</b> ${signal.type}\n` +
                             `💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
@@ -667,13 +665,12 @@ async function scanMarket() {
                             `⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x Cross/İzole\n\n` +
                             `🎯 <b>Kademeli Kâr Hedefleri:</b>\n` +
                             `• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n` +
-                            `• <b>TP2 (Ana Trend Kârı):</b> $${signal.tp2}\n` +
+                            `• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n` +
                             `<i>💡 TP1 alınınca Stop noktanızı Giriş Seviyesine taşıyınız.</i>\n\n` +
-                            `📊 <b>Filtre Teyitleri:</b>\n` +
+                            `📊 <b>Büyük Resim Teyitleri:</b>\n` +
                             `• Aktif Seans: ${session}\n` +
-                            `• BTC Trend: %${btc.change15m} (${btc.btcTrend === 'NEUTRAL' ? 'Stabil' : btc.btcTrend})\n` +
+                            `• 4H Büyük Trend: ${mainTrend === 'BULL' ? '🟢 Boğa (Yükseliş)' : '🔴 Ayı (Düşüş)'}\n` +
                             `• 15dk RSI: ${rsi15m}\n` +
-                            `• Hacim: Ortalamanın ${volMultiplier}x Katı (Climax)\n` +
                             `• Teyit: ${signal.reason}\n\n` +
                             `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
                             `⚠️ <i>"YTD" HEPSİ.</i>`;
@@ -695,21 +692,20 @@ async function scanMarket() {
             }
         }
 
-        // 15 Dakikalık Detaylı Rapor
+        // 15 Dakikalık Durum Özeti
         const nowTime = Date.now();
         if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 15 * 60 * 1000)) {
             const timeNow = getTurkishTimeString();
             const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `⏳ <b>[${timeNow}] PİYASA FİLTRE RAPORU (15M)</b>\n\n` +
+                                `⏳ <b>[${timeNow}] ÇİFT ZAMAN DİLİMİ RAPORU (4H + 15M)</b>\n\n` +
                                 `🌐 <b>Aktif Seans:</b> ${session}\n` +
                                 `📊 <b>İncelenen:</b> ${scannedCount} Futures Paritesi\n` +
                                 `⚡ <b>BTC Durumu:</b> %${btc.change15m} (Stabil)\n\n` +
                                 `🔍 <b>Neden Sinyal Çıkmadı?</b>\n` +
-                                `• <b>Nötr RSI Bölgesi (25–75):</b> ${rsiNeutralCount} Parite\n` +
-                                `• <b>Yetersiz Hacim / Fitil Eksikliği:</b> ${lowVolumeCount} Parite\n` +
-                                `• <b>Trende Karşı Olduğu İçin Elenen:</b> ${trendBlockedCount} Parite\n\n` +
+                                `• <b>Nötr RSI Bölgesi (35–65):</b> ${rsiNeutralCount} Parite\n` +
+                                `• <b>4H Büyük Trende Ters Düştüğü İçin Engellenen:</b> ${trendBlockedCount} Parite\n\n` +
                                 `${getStatsText()}\n\n` +
-                                `🛡️ <i>Disiplinli kural: 15 dakikalık oturmuş dönüş fitili ve hacim tükenişi teyit edilmeden işleme girilmez.</i>\n\n` +
+                                `🛡️ <i>Disiplinli kural: 4 saatlik büyük trend arkamıza alınmadan ve 15 dakikalık düzeltme tamamlanmadan işleme girilmez.</i>\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
 
             await sendTelegramMessage(noSignalMsg);
@@ -725,8 +721,8 @@ async function scanMarket() {
 // 8. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro 15M Yüksek Win Rate Motoru Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> 15 Dakikalık Yüksek Kalite Stratejisi (EMA Trend + Fitil + Hacim Tükenişi + ATR) devrede.");
+    console.log("🚀 ScalpPro 4H Trend + 15M Pro Motoru Başlatıldı...");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> 4 Saatlik Büyük Trend + 15 Dakikalık Giriş Modeli (Multi-Timeframe) devrede.");
     while (true) {
         await scanMarket();
         await sleep(15000);
