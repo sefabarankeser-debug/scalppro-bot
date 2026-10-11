@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro 4H-Trend + 15M-Trigger + L/S & Candle Report Active\n');
+    res.end('ScalpPro 4H-Trend + 15M-Trigger + Strict Filter Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -41,7 +41,6 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
-// 55 Yüksek Likiditeli Futures Paritesi
 const TARGET_COINS = [
     "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
     "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
@@ -57,35 +56,16 @@ const TARGET_COINS = [
 ];
 
 const COIN_ALIASES = {
-    "CFX": ["conflux", "cfx"],
-    "DYM": ["dymension", "dym"],
-    "NOT": ["notcoin", "not"],
-    "JUP": ["jupiter", "jup"],
-    "INJ": ["injective", "inj"],
-    "STX": ["stacks", "stx"],
-    "PENDLE": ["pendle"],
-    "GMX": ["gmx"],
-    "STRK": ["starknet", "strk"],
-    "PYTH": ["pyth network", "pyth"],
-    "W": ["wormhole"],
-    "ZRO": ["layerzero", "zro"],
-    "SUI": ["sui network", "sui"],
-    "SOL": ["solana", "sol"],
-    "DOGE": ["dogecoin", "doge"],
-    "PEPE": ["pepe"],
-    "SHIB": ["shiba", "shiba inu", "shib"],
-    "BONK": ["bonk"],
-    "FLOKI": ["floki"],
-    "AVAX": ["avalanche", "avax"],
-    "NEAR": ["near protocol", "near"],
-    "WIF": ["dogwifhat", "wif"],
-    "APT": ["aptos", "apt"],
-    "TAO": ["bittensor", "tao"],
-    "FET": ["fetch.ai", "fet", "asi"],
-    "SEI": ["sei network", "sei"],
-    "RENDER": ["render", "rndr"],
-    "ARB": ["arbitrum", "arb"],
-    "OP": ["optimism", "op"]
+    "CFX": ["conflux", "cfx"], "DYM": ["dymension", "dym"], "NOT": ["notcoin", "not"],
+    "JUP": ["jupiter", "jup"], "INJ": ["injective", "inj"], "STX": ["stacks", "stx"],
+    "PENDLE": ["pendle"], "GMX": ["gmx"], "STRK": ["starknet", "strk"],
+    "PYTH": ["pyth network", "pyth"], "W": ["wormhole"], "ZRO": ["layerzero", "zro"],
+    "SUI": ["sui network", "sui"], "SOL": ["solana", "sol"], "DOGE": ["dogecoin", "doge"],
+    "PEPE": ["pepe"], "SHIB": ["shiba", "shiba inu", "shib"], "BONK": ["bonk"],
+    "FLOKI": ["floki"], "AVAX": ["avalanche", "avax"], "NEAR": ["near protocol", "near"],
+    "WIF": ["dogwifhat", "wif"], "APT": ["aptos", "apt"], "TAO": ["bittensor", "tao"],
+    "FET": ["fetch.ai", "fet", "asi"], "SEI": ["sei network", "sei"],
+    "RENDER": ["render", "rndr"], "ARB": ["arbitrum", "arb"], "OP": ["optimism", "op"]
 };
 
 const CRITICAL_KEYWORDS = [
@@ -228,15 +208,21 @@ async function fetchLongShortRatio(symbol) {
             const bar = '█'.repeat(Math.max(0, longBlocks)) + '░'.repeat(Math.max(0, shortBlocks));
 
             let sentiment = "Dengeli Dağılım";
-            if (longPct >= 60) sentiment = "Long Baskısı ⚠️";
-            else if (shortPct >= 60) sentiment = "Short Baskısı ⚠️";
+            if (longPct >= 65) sentiment = "Aşırı Long Baskısı ⚠️ (Riskli)";
+            else if (shortPct >= 65) sentiment = "Aşırı Short Baskısı ⚠️ (Riskli)";
 
-            return `⚖️ <b>Long / Short Dağılımı:</b>\n[${bar}] %${longPct} Long | %${shortPct} Short (${sentiment})`;
+            return {
+                longPct,
+                shortPct,
+                text: `⚖️ <b>Long / Short Dağılımı:</b>\n[${bar}] %${longPct} Long | %${shortPct} Short (${sentiment})`
+            };
         }
-    } catch (e) {
-        // Hata durumunda varsayılan dengeli gösterim
-    }
-    return `⚖️ <b>Long / Short Dağılımı:</b>\n[██████████░░░░░░░░░░] %50 Long | %50 Short (Dengeli)`;
+    } catch (e) {}
+    return {
+        longPct: 50,
+        shortPct: 50,
+        text: `⚖️ <b>Long / Short Dağılımı:</b>\n[██████████░░░░░░░░░░] %50 Long | %50 Short (Dengeli)`
+    };
 }
 
 function build4HCandleReport(klines4h) {
@@ -260,7 +246,6 @@ function build4HCandleReport(klines4h) {
         const icon = isBull ? "🟢" : "🔴";
         const sign = isBull ? "+" : "";
 
-        // Mum Genişliği (High - Low) dalga boyu
         const rangePct = Math.abs(((high - low) / open) * 100);
 
         let barFill = Math.min(8, Math.max(1, Math.round(rangePct * 2)));
@@ -372,7 +357,7 @@ async function checkBtcCondition() {
 }
 
 // ==========================================
-// 6. CANLI İŞLEM TAKİBİ & KÂR/ZARAR YÖNETİMİ
+// 6. CANLI İŞLEM TAKİBİ
 // ==========================================
 async function checkActiveTrades(symbol, currentPrice) {
     const trade = activeTrades.get(symbol);
@@ -384,7 +369,7 @@ async function checkActiveTrades(symbol, currentPrice) {
     if (trade.side === 'LONG') {
         if (!trade.tp1Hit && currentPrice >= trade.tp1) {
             trade.tp1Hit = true;
-            trade.sl = trade.entry; // Başa baş stop
+            trade.sl = trade.entry;
             tradeHistory.push({ type: 'TP', time: Date.now() });
 
             const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
@@ -434,7 +419,7 @@ async function checkActiveTrades(symbol, currentPrice) {
     if (trade.side === 'SHORT') {
         if (!trade.tp1Hit && currentPrice <= trade.tp1) {
             trade.tp1Hit = true;
-            trade.sl = trade.entry; // Başa baş stop
+            trade.sl = trade.entry;
             tradeHistory.push({ type: 'TP', time: Date.now() });
 
             const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
@@ -610,7 +595,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const session = getActiveSessionName();
-        console.log(`55 Parite (4H Trend + 15M Tetik) taranıyor [${session}]...`, getTurkishTimeString());
+        console.log(`55 Parite (4H Trend + 15M Tetik + Sıkı Filtre) taranıyor [${session}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -653,7 +638,7 @@ async function scanMarket() {
                 continue;
             }
 
-            // 2. 4 Saatlik Veriyi Çek (Ana Trend + Mum Raporu)
+            // 2. 4 Saatlik Veriyi Çek
             const klines4h = await fetchBybitKlines(symbol, "240", 60);
             await sleep(80);
 
@@ -667,6 +652,26 @@ async function scanMarket() {
             if (currentPrice > ema50_4h && rsi4h >= 50) mainTrend = "BULL";
             else if (currentPrice < ema50_4h && rsi4h <= 50) mainTrend = "BEAR";
 
+            // Son 2 adet 4 saatlik mumun yönünü kontrol et
+            const last3_4h = klines4h.slice(-3);
+            const m2_open = parseFloat(last3_4h[1][1]);
+            const m2_close = parseFloat(last3_4h[1][4]);
+            const m3_open = parseFloat(last3_4h[2][1]);
+            const m3_close = parseFloat(last3_4h[2][4]);
+
+            const m2_isRed = m2_close < m2_open;
+            const m3_isRed = m3_close < m3_open;
+            const m2_isGreen = m2_close > m2_open;
+            const m3_isGreen = m3_close > m3_open;
+
+            // Son 2 mum arka arkaya kırmızıysa Long açılmaz!
+            const twoConsecutiveReds = (m2_isRed && m3_isRed);
+            // Son 2 mum arka arkaya yeşilse Short açılmaz!
+            const twoConsecutiveGreens = (m2_isGreen && m3_isGreen);
+
+            // Long / Short Oranını Çek ve Filtrele
+            const lsData = await fetchLongShortRatio(symbol);
+
             const atr15 = calculateATR(highs15, lows15, closes15, 14);
             const now = Date.now();
             const cleanSymbol = symbol.replace('USDT', '');
@@ -674,9 +679,11 @@ async function scanMarket() {
 
             let signal = null;
 
-            // 🟢 LONG KURALI:
+            // 🟢 LONG KURALI (Sıkı Filtreli):
+            // Şartlar: 15M Dip (RSI <= 35) + 4H Bull Trend + Alt Fitil + BTC Güvenli +
+            // Long Oranı <%65 (Tuzağa Düşme) + Son 2 4H mum kırmızı OLMAMALI!
             const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.35);
-            if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP") {
+            if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && lsData.longPct < 65 && !twoConsecutiveReds) {
                 const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
                 const sl = currentPrice - stopDist;
                 const tp1 = currentPrice + (stopDist * 1.3);
@@ -696,9 +703,11 @@ async function scanMarket() {
                 };
             }
 
-            // 🔴 SHORT KURALI:
+            // 🔴 SHORT KURALI (Sıkı Filtreli):
+            // Şartlar: 15M Tepe (RSI >= 65) + 4H Bear Trend + Üst Fitil + BTC Güvenli +
+            // Short Oranı <%65 (Short Squeeze Olma) + Son 2 4H mum yeşil OLMAMALI!
             const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.35);
-            if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP") {
+            if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && lsData.shortPct < 65 && !twoConsecutiveGreens) {
                 const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
                 const sl = currentPrice + stopDist;
                 const tp1 = currentPrice - (stopDist * 1.3);
@@ -725,7 +734,6 @@ async function scanMarket() {
             // Sinyal Gönderimi
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (now - lastAlertTime >= 30 * 60 * 1000)) {
-                const lsRatioText = await fetchLongShortRatio(symbol);
                 const candleReportText = build4HCandleReport(klines4h);
 
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
@@ -739,7 +747,7 @@ async function scanMarket() {
                             `• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n` +
                             `• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n` +
                             `<i>💡 TP1 alınınca Stop noktanızı Giriş Seviyesine taşıyınız.</i>\n\n` +
-                            `${lsRatioText}\n\n` +
+                            `${lsData.text}\n\n` +
                             `${candleReportText}\n\n` +
                             `📊 <b>Piyasa Teyitleri:</b>\n` +
                             `• Aktif Seans: ${session}\n` +
@@ -776,9 +784,9 @@ async function scanMarket() {
                                 `⚡ <b>BTC Durumu:</b> %${btc.change15m} (Stabil)\n\n` +
                                 `🔍 <b>Neden Sinyal Çıkmadı?</b>\n` +
                                 `• <b>Nötr RSI Bölgesi (35–65):</b> ${rsiNeutralCount} Parite\n` +
-                                `• <b>4H Büyük Trende Ters Düştüğü İçin Engellenen:</b> ${trendBlockedCount} Parite\n\n` +
+                                `• <b>4H Trend / L-S / Mum Kilidine Takılan:</b> ${trendBlockedCount} Parite\n\n` +
                                 `${getStatsText()}\n\n` +
-                                `🛡️ <i>Disiplinli kural: 4 saatlik büyük trend arkamıza alınmadan ve 15 dakikalık düzeltme tamamlanmadan işleme girilmez.</i>\n\n` +
+                                `🛡️ <i>Disiplinli kural: Piyasa aşırı long/short yığılması içerdiğinde veya son 4H mumlar ters aktığında işlem engellenir.</i>\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
 
             await sendTelegramMessage(noSignalMsg);
@@ -794,8 +802,8 @@ async function scanMarket() {
 // 9. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Multi-TF + Candle Report Motoru Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Long/Short Oranları ve 4H Mum Genişlik Raporu devrede.");
+    console.log("🚀 ScalpPro Multi-TF + Sıkı L/S & Mum Filtresi Başlatıldı...");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Likidasyon tuzağı ve arka arkaya ters mum filtreleri devreye alındı.");
     while (true) {
         await scanMarket();
         await sleep(15000);
