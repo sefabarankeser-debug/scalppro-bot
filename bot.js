@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro 4H-Trend + 15M-Trigger Engine Active\n');
+    res.end('ScalpPro 4H-Trend + 15M-Trigger + L/S & Candle Report Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -209,118 +209,75 @@ function sendTelegramMessage(text) {
 }
 
 // ==========================================
-// 4. HABER RADARI (CRYPTOPANIC)
+// 4. LONG/SHORT & 4H MUM RAPORLAYICILARI
 // ==========================================
-async function checkBreakingNews() {
+async function fetchLongShortRatio(symbol) {
     try {
-        const now = Date.now();
-        if (now - lastNewsCheckTime < 60 * 1000) return;
-        lastNewsCheckTime = now;
+        const url = `https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=${symbol}&period=4h&limit=1`;
+        const json = await fetchJSON(url);
+        if (json.retCode === 0 && json.result && json.result.list && json.result.list.length > 0) {
+            const item = json.result.list[0];
+            const buyRatio = parseFloat(item.buyRatio);
+            const sellRatio = parseFloat(item.sellRatio);
+            const longPct = Math.round(buyRatio * 100);
+            const shortPct = Math.round(sellRatio * 100);
 
-        const data = await fetchJSON('https://cryptopanic.com/api/free/v1/posts/?public=true');
-        if (!data || !data.results || !Array.isArray(data.results)) return;
+            const totalBlocks = 20;
+            const longBlocks = Math.round((longPct / 100) * totalBlocks);
+            const shortBlocks = totalBlocks - longBlocks;
+            const bar = '█'.repeat(Math.max(0, longBlocks)) + '░'.repeat(Math.max(0, shortBlocks));
 
-        for (const item of data.results.slice(0, 15)) {
-            const newsId = item.id.toString();
-            if (processedNewsIds.has(newsId)) continue;
-            processedNewsIds.add(newsId);
+            let sentiment = "Dengeli Dağılım";
+            if (longPct >= 60) sentiment = "Long Baskısı ⚠️";
+            else if (shortPct >= 60) sentiment = "Short Baskısı ⚠️";
 
-            if (processedNewsIds.size > 300) {
-                const firstKey = processedNewsIds.values().next().value;
-                processedNewsIds.delete(firstKey);
-            }
-
-            const title = (item.title || "").trim();
-            const lowerTitle = title.toLowerCase();
-
-            let matchedCoin = null;
-
-            for (const [ticker, aliases] of Object.entries(COIN_ALIASES)) {
-                if (aliases.some(alias => new RegExp(`\\b${alias}\\b`, 'i').test(lowerTitle))) {
-                    matchedCoin = ticker;
-                    break;
-                }
-            }
-
-            if (!matchedCoin) {
-                for (const sym of TARGET_COINS) {
-                    const clean = sym.replace('USDT', '').replace('1000', '');
-                    const regex = new RegExp(`\\b${clean}\\b`, 'i');
-                    if (regex.test(lowerTitle)) {
-                        matchedCoin = clean;
-                        break;
-                    }
-                }
-            }
-
-            const isMacroOrBtc = lowerTitle.includes('bitcoin') || lowerTitle.includes('btc') ||
-                                 CRITICAL_KEYWORDS.some(kw => lowerTitle.includes(kw));
-
-            if (matchedCoin) {
-                const newsMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `📰 <b>FLAŞ HABER RADARI | #${matchedCoin}</b>\n\n` +
-                                `📢 <b>Başlık:</b> ${title}\n\n` +
-                                `⚠️ <b>Etki:</b> Paritede volatilite ve hacim artışı bekleniyor!\n\n` +
-                                `⚠️ <i>"YTD" HEPSİ.</i>`;
-                await sendTelegramMessage(newsMsg);
-                await sleep(1000);
-            } else if (isMacroOrBtc) {
-                const macroMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                 `🚨 <b>PİYASA GENELİ SICAK GELİŞME (BTC / MAKRO)</b>\n\n` +
-                                 `📢 <b>Haber:</b> ${title}\n\n` +
-                                 `🛑 Dalgalanma durumunda sinyaller kilitlenebilir.\n\n` +
-                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
-                await sendTelegramMessage(macroMsg);
-                await sleep(1000);
-            }
+            return `⚖️ <b>Long / Short Dağılımı:</b>\n[${bar}] %${longPct} Long | %${shortPct} Short (${sentiment})`;
         }
     } catch (e) {
-        console.error("Haber kontrol hatası:", e.message);
+        // Hata durumunda varsayılan dengeli gösterim
     }
+    return `⚖️ <b>Long / Short Dağılımı:</b>\n[██████████░░░░░░░░░░] %50 Long | %50 Short (Dengeli)`;
 }
 
-async function checkSessionAlerts() {
-    const now = new Date();
-    const trHour = (now.getUTCHours() + 3) % 24;
-    const trMinute = now.getUTCMinutes();
-    const todayStr = now.toISOString().slice(0, 10);
+function build4HCandleReport(klines4h) {
+    if (!klines4h || klines4h.length < 3) return "";
 
-    if (lastNotifiedEvents.date !== todayStr) {
-        lastNotifiedEvents = {
-            date: todayStr,
-            approachingNY: false,
-            openNY: false,
-            closeNY: false
-        };
+    const last3 = klines4h.slice(-3);
+    const labels = ["Mum 1 (8-12s)", "Mum 2 (4-8s) ", "Mum 3 (Son 4s)"];
+    const lines = [];
+    let netGain = 0;
+
+    for (let i = 0; i < 3; i++) {
+        const open = parseFloat(last3[i][1]);
+        const high = parseFloat(last3[i][2]);
+        const low = parseFloat(last3[i][3]);
+        const close = parseFloat(last3[i][4]);
+
+        const changePct = ((close - open) / open) * 100;
+        netGain += changePct;
+
+        const isBull = changePct >= 0;
+        const icon = isBull ? "🟢" : "🔴";
+        const sign = isBull ? "+" : "";
+
+        // Mum Genişliği (High - Low) dalga boyu
+        const rangePct = Math.abs(((high - low) / open) * 100);
+
+        let barFill = Math.min(8, Math.max(1, Math.round(rangePct * 2)));
+        let bar = '█'.repeat(barFill) + '░'.repeat(8 - barFill);
+
+        let tag = "Düşük";
+        if (rangePct >= 2.5) tag = isBull ? "Yüksek Alım 🔥" : "Yüksek Satış 🔥";
+        else if (rangePct >= 1.2) tag = "Orta";
+
+        lines.push(` ${labels[i]}: ${icon} [${bar}] ${sign}${changePct.toFixed(1)}% | Genişlik: %${rangePct.toFixed(1)} (${tag})`);
     }
 
-    if (trHour === 16 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.approachingNY) {
-        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                    `⏳ <b>DİKKAT: EN HAREKETLİ SEANSA 30 DAKİKA KALDI!</b>\n\n` +
-                    `🗽 <b>16:30'da ABD (Wall Street) Piyasaları Açılıyor!</b>\n` +
-                    `• ETF işlemleri ve fonlar piyasaya girmek üzere.\n\n` +
-                    `⚠️ <i>"YTD" HEPSİ.</i>`;
-        await sendTelegramMessage(msg);
-        lastNotifiedEvents.approachingNY = true;
-    }
+    let netTrendText = "⚪ Yatay / Kararsız Seyir";
+    if (netGain >= 1.5) netTrendText = "🟢 Güçlü Boğa Baskısı (Bull Dominance)";
+    else if (netGain <= -1.5) netTrendText = "🔴 Güçlü Ayı Baskısı (Bear Dominance)";
 
-    if (trHour === 16 && trMinute >= 30 && trMinute < 40 && !lastNotifiedEvents.openNY) {
-        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                    `🔥 <b>NEW YORK (WALL STREET) SEANSI RESMEN AÇILDI!</b>\n\n` +
-                    `⚡ Günün en yüksek hacimli dönemi devrede.\n\n` +
-                    `⚠️ <i>"YTD" HEPSİ.</i>`;
-        await sendTelegramMessage(msg);
-        lastNotifiedEvents.openNY = true;
-    }
-
-    if (trHour === 23 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.closeNY) {
-        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                    `🌙 <b>NEW YORK SEANSI KAPANDI (PİYASA SAKİNLEŞİYOR)</b>\n\n` +
-                    `💤 ABD borsaları kapandı, ana hacim dalgası sona erdi.\n\n` +
-                    `⚠️ <i>"YTD" HEPSİ.</i>`;
-        await sendTelegramMessage(msg);
-        lastNotifiedEvents.closeNY = true;
-    }
+    return `🕯️ <b>4H Mum Yapısı (Son 12 Saat & Genişlik):</b>\n<pre>${lines.join('\n')}\n ↳ Net Yön: ${netTrendText}</pre>`;
 }
 
 // ==========================================
@@ -530,7 +487,122 @@ async function checkActiveTrades(symbol, currentPrice) {
 }
 
 // ==========================================
-// 7. MULTI-TIMEFRAME (4H + 15M) TARAMA DÖNGÜSÜ
+// 7. HABER & SEANS RADARI
+// ==========================================
+async function checkBreakingNews() {
+    try {
+        const now = Date.now();
+        if (now - lastNewsCheckTime < 60 * 1000) return;
+        lastNewsCheckTime = now;
+
+        const data = await fetchJSON('https://cryptopanic.com/api/free/v1/posts/?public=true');
+        if (!data || !data.results || !Array.isArray(data.results)) return;
+
+        for (const item of data.results.slice(0, 15)) {
+            const newsId = item.id.toString();
+            if (processedNewsIds.has(newsId)) continue;
+            processedNewsIds.add(newsId);
+
+            if (processedNewsIds.size > 300) {
+                const firstKey = processedNewsIds.values().next().value;
+                processedNewsIds.delete(firstKey);
+            }
+
+            const title = (item.title || "").trim();
+            const lowerTitle = title.toLowerCase();
+
+            let matchedCoin = null;
+
+            for (const [ticker, aliases] of Object.entries(COIN_ALIASES)) {
+                if (aliases.some(alias => new RegExp(`\\b${alias}\\b`, 'i').test(lowerTitle))) {
+                    matchedCoin = ticker;
+                    break;
+                }
+            }
+
+            if (!matchedCoin) {
+                for (const sym of TARGET_COINS) {
+                    const clean = sym.replace('USDT', '').replace('1000', '');
+                    const regex = new RegExp(`\\b${clean}\\b`, 'i');
+                    if (regex.test(lowerTitle)) {
+                        matchedCoin = clean;
+                        break;
+                    }
+                }
+            }
+
+            const isMacroOrBtc = lowerTitle.includes('bitcoin') || lowerTitle.includes('btc') ||
+                                 CRITICAL_KEYWORDS.some(kw => lowerTitle.includes(kw));
+
+            if (matchedCoin) {
+                const newsMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                                `📰 <b>FLAŞ HABER RADARI | #${matchedCoin}</b>\n\n` +
+                                `📢 <b>Başlık:</b> ${title}\n\n` +
+                                `⚠️ <b>Etki:</b> Paritede volatilite ve hacim artışı bekleniyor!\n\n` +
+                                `⚠️ <i>"YTD" HEPSİ.</i>`;
+                await sendTelegramMessage(newsMsg);
+                await sleep(1000);
+            } else if (isMacroOrBtc) {
+                const macroMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                                 `🚨 <b>PİYASA GENELİ SICAK GELİŞME (BTC / MAKRO)</b>\n\n` +
+                                 `📢 <b>Haber:</b> ${title}\n\n` +
+                                 `🛑 Dalgalanma durumunda sinyaller kilitlenebilir.\n\n` +
+                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
+                await sendTelegramMessage(macroMsg);
+                await sleep(1000);
+            }
+        }
+    } catch (e) {
+        console.error("Haber kontrol hatası:", e.message);
+    }
+}
+
+async function checkSessionAlerts() {
+    const now = new Date();
+    const trHour = (now.getUTCHours() + 3) % 24;
+    const trMinute = now.getUTCMinutes();
+    const todayStr = now.toISOString().slice(0, 10);
+
+    if (lastNotifiedEvents.date !== todayStr) {
+        lastNotifiedEvents = {
+            date: todayStr,
+            approachingNY: false,
+            openNY: false,
+            closeNY: false
+        };
+    }
+
+    if (trHour === 16 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.approachingNY) {
+        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                    `⏳ <b>DİKKAT: EN HAREKETLİ SEANSA 30 DAKİKA KALDI!</b>\n\n` +
+                    `🗽 <b>16:30'da ABD (Wall Street) Piyasaları Açılıyor!</b>\n` +
+                    `• ETF işlemleri ve fonlar piyasaya girmek üzere.\n\n` +
+                    `⚠️ <i>"YTD" HEPSİ.</i>`;
+        await sendTelegramMessage(msg);
+        lastNotifiedEvents.approachingNY = true;
+    }
+
+    if (trHour === 16 && trMinute >= 30 && trMinute < 40 && !lastNotifiedEvents.openNY) {
+        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                    `🔥 <b>NEW YORK (WALL STREET) SEANSI RESMEN AÇILDI!</b>\n\n` +
+                    `⚡ Günün en yüksek hacimli dönemi devrede.\n\n` +
+                    `⚠️ <i>"YTD" HEPSİ.</i>`;
+        await sendTelegramMessage(msg);
+        lastNotifiedEvents.openNY = true;
+    }
+
+    if (trHour === 23 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.closeNY) {
+        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                    `🌙 <b>NEW YORK SEANSI KAPANDI (PİYASA SAKİNLEŞİYOR)</b>\n\n` +
+                    `💤 ABD borsaları kapandı, ana hacim dalgası sona erdi.\n\n` +
+                    `⚠️ <i>"YTD" HEPSİ.</i>`;
+        await sendTelegramMessage(msg);
+        lastNotifiedEvents.closeNY = true;
+    }
+}
+
+// ==========================================
+// 8. MULTI-TIMEFRAME (4H + 15M) TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -552,7 +624,7 @@ async function scanMarket() {
         let rsiNeutralCount = 0;
 
         for (const symbol of TARGET_COINS) {
-            // Adım 1: 15 Dakikalık Mumları Çek
+            // 1. 15 Dakikalık Veriyi Çek
             const klines15m = await fetchBybitKlines(symbol, "15", 50);
             await sleep(80);
 
@@ -573,7 +645,6 @@ async function scanMarket() {
 
             const rsi15m = calculateRSI(closes15, 14);
 
-            // Eğer 15m RSI aşırı bölgede değilse 4H verisini çekmeye gerek yok (API kotasını korur)
             const isPotentialLong = (rsi15m <= 35);
             const isPotentialShort = (rsi15m >= 65);
 
@@ -582,7 +653,7 @@ async function scanMarket() {
                 continue;
             }
 
-            // Adım 2: 4 Saatlik Ana Trendi Doğrula (interval=240)
+            // 2. 4 Saatlik Veriyi Çek (Ana Trend + Mum Raporu)
             const klines4h = await fetchBybitKlines(symbol, "240", 60);
             await sleep(80);
 
@@ -604,7 +675,6 @@ async function scanMarket() {
             let signal = null;
 
             // 🟢 LONG KURALI:
-            // 4 Saatlik Ana Trend BULL iken, 15 Dakikalıkta Düzeltme (RSI <= 35) + Dip Fitili Reaksiyonu
             const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.35);
             if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP") {
                 const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
@@ -622,12 +692,11 @@ async function scanMarket() {
                     tp1: formatPrice(tp1, currentPrice),
                     tp2: formatPrice(tp2, currentPrice),
                     tp1Pct: (((tp1 - currentPrice) / currentPrice) * 100).toFixed(2),
-                    reason: `4H Ana Trend Yükseliş (RSI: ${rsi4h}), 15M Sağlıklı Dip Testi (RSI: ${rsi15m})`
+                    reason: `4H Ana Trend Yükseliş (RSI: ${rsi4h}), 15M Dip Testi (RSI: ${rsi15m})`
                 };
             }
 
             // 🔴 SHORT KURALI:
-            // 4 Saatlik Ana Trend BEAR iken, 15 Dakikalıkta Tepki (RSI >= 65) + Tepe Fitili Reaksiyonu
             const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.35);
             if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP") {
                 const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
@@ -645,7 +714,7 @@ async function scanMarket() {
                     tp1: formatPrice(tp1, currentPrice),
                     tp2: formatPrice(tp2, currentPrice),
                     tp1Pct: (((currentPrice - tp1) / currentPrice) * 100).toFixed(2),
-                    reason: `4H Ana Trend Düşüş (RSI: ${rsi4h}), 15M Aşırı Tepki Tepesi (RSI: ${rsi15m})`
+                    reason: `4H Ana Trend Düşüş (RSI: ${rsi4h}), 15M Tepe Testi (RSI: ${rsi15m})`
                 };
             }
 
@@ -653,9 +722,12 @@ async function scanMarket() {
                 trendBlockedCount++;
             }
 
-            // Sinyal İletimi
+            // Sinyal Gönderimi
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (now - lastAlertTime >= 30 * 60 * 1000)) {
+                const lsRatioText = await fetchLongShortRatio(symbol);
+                const candleReportText = build4HCandleReport(klines4h);
+
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                             `🎯 <b>ÇİFT ZAMAN DİLİMLİ PRO SİNYAL (4H + 15M)</b> 🎯\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
@@ -667,11 +739,12 @@ async function scanMarket() {
                             `• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n` +
                             `• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n` +
                             `<i>💡 TP1 alınınca Stop noktanızı Giriş Seviyesine taşıyınız.</i>\n\n` +
-                            `📊 <b>Büyük Resim Teyitleri:</b>\n` +
+                            `${lsRatioText}\n\n` +
+                            `${candleReportText}\n\n` +
+                            `📊 <b>Piyasa Teyitleri:</b>\n` +
                             `• Aktif Seans: ${session}\n` +
-                            `• 4H Büyük Trend: ${mainTrend === 'BULL' ? '🟢 Boğa (Yükseliş)' : '🔴 Ayı (Düşüş)'}\n` +
                             `• 15dk RSI: ${rsi15m}\n` +
-                            `• Teyit: ${signal.reason}\n\n` +
+                            `• Analiz: ${signal.reason}\n\n` +
                             `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
                             `⚠️ <i>"YTD" HEPSİ.</i>`;
 
@@ -718,11 +791,11 @@ async function scanMarket() {
 }
 
 // ==========================================
-// 8. ANA ÇALIŞTIRICI
+// 9. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro 4H Trend + 15M Pro Motoru Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> 4 Saatlik Büyük Trend + 15 Dakikalık Giriş Modeli (Multi-Timeframe) devrede.");
+    console.log("🚀 ScalpPro Multi-TF + Candle Report Motoru Başlatıldı...");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Long/Short Oranları ve 4H Mum Genişlik Raporu devrede.");
     while (true) {
         await scanMarket();
         await sleep(15000);
