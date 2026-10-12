@@ -1,916 +1,782 @@
-process.on('uncaughtException', (err) => {
-    console.error('Kritik Hata Yakalandı:', err.message);
-});
-
-process.on('unhandledRejection', (reason) => {
-    console.error('İşlenmeyen Promise Hatası:', reason);
-});
-
-const http = require('http');
-const https = require('https');
-
-// ==========================================
-// 1. RENDER PORT & SABİT TELEGRAM BİLGİLERİ
-// ==========================================
-const PORT = process.env.PORT || 10000;
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro 4H-Trend + 15M-Trigger + Interactive Commands Active\n');
-}).listen(PORT, '0.0.0.0', () => {
-    console.log(`Sunucu ${PORT} portunda aktif.`);
-});
-
-const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
-const CHAT_ID = "-1004412694884";
-
-// ==========================================
-// 2. HAFIZA & DEĞİŞKENLER
-// ==========================================
-let lastUpdateId = 0; // Telegram mesaj dinleyici için
-const alertedCoins = new Map();
-const activeTrades = new Map();
-const processedNewsIds = new Set();
-const tradeHistory = [];
-
-let lastStatusReportTime = 0;
-let lastNewsCheckTime = 0;
-
-let lastNotifiedEvents = {
-    date: "",
-    approachingNY: false,
-    openNY: false,
-    closeNY: false
-};
-
-const TARGET_COINS = [
-    "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
-    "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
-    "FETUSDT", "SEIUSDT", "ARKMUSDT", "RENDERUSDT", "INJUSDT",
-    "ARBUSDT", "OPUSDT", "TIAUSDT", "NOTUSDT", "1000FLOKIUSDT",
-    "1000BONKUSDT", "BCHUSDT", "PENDLEUSDT", "GALAUSDT", "STXUSDT",
-    "ORDIUSDT", "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT",
-    "JUPUSDT", "ENAUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT",
-    "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT",
-    "LINKUSDT", "FTMUSDT", "SANDUSDT", "MANAUSDT", "THETAUSDT",
-    "LTCUSDT", "ATOMUSDT", "FILUSDT", "ETCUSDT", "ALGOUSDT",
-    "DYMUSDT", "ZROUSDT", "STRKUSDT", "PYTHUSDT", "WUSDT"
-];
-
-const COIN_ALIASES = {
-    "CFX": ["conflux", "cfx"], "DYM": ["dymension", "dym"], "NOT": ["notcoin", "not"],
-    "JUP": ["jupiter", "jup"], "INJ": ["injective", "inj"], "STX": ["stacks", "stx"],
-    "PENDLE": ["pendle"], "GMX": ["gmx"], "STRK": ["starknet", "strk"],
-    "PYTH": ["pyth network", "pyth"], "W": ["wormhole"], "ZRO": ["layerzero", "zro"],
-    "SUI": ["sui network", "sui"], "SOL": ["solana", "sol"], "DOGE": ["dogecoin", "doge"],
-    "PEPE": ["pepe"], "SHIB": ["shiba", "shiba inu", "shib"], "BONK": ["bonk"],
-    "FLOKI": ["floki"], "AVAX": ["avalanche", "avax"], "NEAR": ["near protocol", "near"],
-    "WIF": ["dogwifhat", "wif"], "APT": ["aptos", "apt"], "TAO": ["bittensor", "tao"],
-    "FET": ["fetch.ai", "fet", "asi"], "SEI": ["sei network", "sei"],
-    "RENDER": ["render", "rndr"], "ARB": ["arbitrum", "arb"], "OP": ["optimism", "op"]
-};
-
-const CRITICAL_KEYWORDS = [
-    "sec", "fed", "powell", "binance", "tether", "etf", "interest rate",
-    "inflation", "cpi", "hack", "liquidation", "ban", "lawsuit", "court", "war", "tariff"
-];
-
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-function getTurkishTimeString() {
-    return new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul' });
-}
-
-function formatPrice(val, basePrice) {
-    if (!val || isNaN(val)) return "0.00";
-    const ref = basePrice || val;
-    let decimals = 4;
-    if (ref < 0.001) decimals = 7;
-    else if (ref < 0.1) decimals = 6;
-    else if (ref < 1) decimals = 5;
-    else if (ref < 10) decimals = 4;
-    else if (ref < 1000) decimals = 2;
-    else decimals = 1;
-    return Number(val).toFixed(decimals);
-}
-
-function getPeriodStats(hours) {
-    const cutoff = Date.now() - (hours * 60 * 60 * 1000);
-    const filtered = tradeHistory.filter(t => t.time >= cutoff);
-
-    const tps = filtered.filter(t => t.type === 'TP').length;
-    const stops = filtered.filter(t => t.type === 'STOP').length;
-    const total = tps + stops;
-    const winRate = total > 0 ? ((tps / total) * 100).toFixed(1) : "0.0";
-
-    return { tps, stops, total, winRate };
-}
-
-function getStatsText() {
-    const twelveHoursAgo = Date.now() - (12 * 60 * 60 * 1000);
-    while (tradeHistory.length > 0 && tradeHistory[0].time < twelveHoursAgo) {
-        tradeHistory.shift();
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>L/S Pro Radar & Likidasyon Terminali</title>
+  
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0c0f17">
+  
+  <!-- TradingView Hafif Grafik Kütüphanesi -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  
+  <style>
+    :root {
+      --bg: #0c0f17;
+      --card-bg: #141923;
+      --border: #1f2637;
+      --green: #26a69a;
+      --red: #ef5350;
+      --yellow: #f0b90b;
+      --blue: #2962ff;
+      --purple: #ab47bc;
+      --muted: #788292;
+      --text: #d1d4dc;
     }
 
-    const s1 = getPeriodStats(1);
-    const s12 = getPeriodStats(12);
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
-    let text1 = s1.total > 0
-        ? `• ⚡ <b>Son 1 Saat:</b> ${s1.tps} TP | ${s1.stops} Stop (<b>%${s1.winRate} Win Rate</b>)`
-        : `• ⚡ <b>Son 1 Saat:</b> İşlem yok`;
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding-top: env(safe-area-inset-top, 0px);
+    }
 
-    let text12 = s12.total > 0
-        ? `• 🌐 <b>Son 12 Saat:</b> ${s12.tps} TP | ${s12.stops} Stop (<b>%${s12.winRate} Win Rate</b>)`
-        : `• 🌐 <b>Son 12 Saat:</b> Henüz sonuçlanan işlem yok`;
+    /* Üst Bar */
+    header {
+      background: #11151f;
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .logo { font-size: 13px; font-weight: bold; color: var(--yellow); white-space: nowrap; }
+    .search-input {
+      flex: 1;
+      background: #181f2c;
+      border: 1px solid var(--border);
+      color: #fff;
+      padding: 5px 9px;
+      border-radius: 6px;
+      font-size: 12px;
+      outline: none;
+    }
+    .search-input:focus { border-color: var(--yellow); }
+    .price-box {
+      font-size: 11px;
+      font-weight: bold;
+      color: var(--green);
+      background: #090c12;
+      padding: 4px 7px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
 
-    return `📊 <b>Canlı Başarı Karnesi (4H Trend + 15M):</b>\n${text1}\n${text12}`;
-}
+    /* Grafik Kontrolleri */
+    .chart-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 10px;
+      background: #0f131c;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .active-coin-tag { font-size: 12px; font-weight: bold; color: var(--yellow); }
+    .tf-buttons { display: flex; gap: 4px; }
+    .tf-btn {
+      background: #161b26;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .tf-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 
-function getActiveSessionName() {
-    const now = new Date();
-    const trHour = (now.getUTCHours() + 3) % 24;
-    if (trHour >= 2 && trHour < 10) return "🌏 Asya Seansı";
-    if (trHour >= 10 && trHour < 16) return "🇪🇺 Londra Seansı";
-    return "🗽 New York Seansı";
-}
+    /* Grafikler */
+    #main-chart { width: 100%; height: 185px; background: var(--bg); flex-shrink: 0; }
+    #osc-chart { width: 100%; height: 75px; background: #080a0f; border-top: 1px solid #161b26; flex-shrink: 0; }
 
-// ==========================================
-// 3. API & TELEGRAM İLETİŞİM MOTORLARI
-// ==========================================
-function fetchJSON(url, customHeaders = {}) {
-    return new Promise((resolve, reject) => {
-        const headers = Object.assign({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, customHeaders);
-        https.get(url, { headers }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try {
-                    resolve(JSON.parse(data));
-                } catch (e) {
-                    reject(e);
-                }
-            });
-        }).on('error', reject);
-    });
-}
+    /* 6'lı Bilgi ve Likidasyon Şeridi */
+    .indicator-strip {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 3px;
+      padding: 4px 6px;
+      background: #0f131c;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      font-size: 9px;
+    }
+    .stat-box { background: var(--card-bg); padding: 3px 4px; border-radius: 4px; border: 1px solid var(--border); text-align: center; }
+    .stat-lbl { color: var(--muted); font-size: 8px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stat-val { font-weight: bold; margin-top: 1px; color: #fff; font-size: 10px; }
 
-function sendTelegramMessage(text, replyToId = null) {
-    return new Promise((resolve) => {
-        const payloadObj = {
-            chat_id: CHAT_ID,
-            text: text,
-            parse_mode: 'HTML',
-            disable_web_page_preview: true
-        };
-        if (replyToId) payloadObj.reply_to_message_id = replyToId;
+    /* L/S Listesi ve Sıralama */
+    .scanner-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: #090c12;
+    }
+    .scanner-tabs {
+      display: flex;
+      background: #11151f;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      scrollbar-width: none;
+      flex-shrink: 0;
+    }
+    .scanner-tabs::-webkit-scrollbar { display: none; }
+    .tab-btn {
+      flex: 0 0 auto;
+      padding: 7px 11px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-weight: bold;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tab-btn.active { color: var(--yellow); border-bottom: 2px solid var(--yellow); background: rgba(240, 185, 11, 0.08); }
 
-        const payload = JSON.stringify(payloadObj);
-        const options = {
-            hostname: 'api.telegram.org',
-            port: 443,
-            path: `/bot${TELEGRAM_TOKEN}/sendMessage`,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(payload)
-            }
-        };
+    .scanner-sub {
+      padding: 4px 8px;
+      background: #0b0e14;
+      font-size: 10px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .sort-group { display: flex; gap: 4px; }
+    .sort-btn {
+      background: #181f2c;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 9px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .sort-btn.active { background: var(--yellow); color: #000; border-color: var(--yellow); }
 
-        const req = https.request(options, (res) => {
-            let resData = '';
-            res.on('data', chunk => resData += chunk);
-            res.on('end', () => resolve(res.statusCode === 200));
-        });
+    .scanner-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px;
+      padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      -webkit-overflow-scrolling: touch;
+    }
 
-        req.on('error', (e) => {
-            console.error('🔴 Telegram Hatası:', e.message);
-            resolve(false);
-        });
+    /* Coin Kartı */
+    .coin-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 9px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .coin-card:active { background: #1c2331; }
+    .coin-card.active-card { border-color: var(--yellow); background: #18202d; }
 
-        req.write(payload);
-        req.end();
-    });
-}
+    .coin-left { display: flex; flex-direction: column; gap: 2px; min-width: 115px; }
+    .coin-sym { font-size: 13px; font-weight: bold; color: #fff; display: flex; align-items: center; gap: 4px; }
+    .coin-price-row { font-size: 10px; font-weight: 500; display: flex; align-items: center; gap: 4px; }
+    .badge-pnl-up { color: var(--green); }
+    .badge-pnl-down { color: var(--red); }
+    .tag-row { display: flex; gap: 3px; align-items: center; margin-top: 1px; flex-wrap: wrap; }
+    .tag-fund { font-size: 8px; padding: 1px 3px; border-radius: 2px; background: #1a202c; color: var(--muted); }
+    .tag-oi { font-size: 8px; padding: 1px 3px; border-radius: 2px; background: #1c2838; color: #64b5f6; }
+    .tag-liq-dst { font-size: 8px; padding: 1px 3px; border-radius: 2px; background: rgba(171, 71, 188, 0.2); color: #ce93d8; border: 1px solid #ba68c8; font-weight: bold; }
+    .tag-squeeze { font-size: 8px; padding: 1px 3px; border-radius: 2px; font-weight: bold; animation: pulse 1.2s infinite; }
+    .squeeze-l { background: rgba(239, 83, 80, 0.25); color: #ff8a80; border: 1px solid var(--red); }
+    .squeeze-s { background: rgba(38, 166, 154, 0.25); color: #b9f6ca; border: 1px solid var(--green); }
 
-// ==========================================
-// 4. LONG/SHORT & 4H MUM RAPORLAYICILARI
-// ==========================================
-async function fetchLongShortRatio(symbol) {
-    try {
-        const url = `https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=${symbol}&period=4h&limit=1`;
-        const json = await fetchJSON(url);
-        if (json.retCode === 0 && json.result && json.result.list && json.result.list.length > 0) {
-            const item = json.result.list[0];
-            const buyRatio = parseFloat(item.buyRatio);
-            const sellRatio = parseFloat(item.sellRatio);
-            const longPct = Math.round(buyRatio * 100);
-            const shortPct = Math.round(sellRatio * 100);
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
 
-            const totalBlocks = 20;
-            const longBlocks = Math.round((longPct / 100) * totalBlocks);
-            const shortBlocks = totalBlocks - longBlocks;
-            const bar = '█'.repeat(Math.max(0, longBlocks)) + '░'.repeat(Math.max(0, shortBlocks));
+    .coin-center { flex: 1; margin: 0 10px; display: flex; flex-direction: column; gap: 3px; }
+    .ratio-labels { display: flex; justify-content: space-between; font-size: 10px; font-weight: bold; }
+    .l-txt { color: var(--green); }
+    .s-txt { color: var(--red); }
+    .bar-bg { height: 6px; background: var(--red); border-radius: 3px; overflow: hidden; display: flex; }
+    .bar-fill { background: var(--green); height: 100%; transition: width 0.3s; }
 
-            let sentiment = "Dengeli Dağılım";
-            if (longPct >= 65) sentiment = "Aşırı Long Baskısı ⚠️ (Riskli)";
-            else if (shortPct >= 65) sentiment = "Aşırı Short Baskısı ⚠️ (Riskli)";
+    .coin-right { display: flex; align-items: center; gap: 6px; }
+    .ratio-badge { font-size: 12px; font-weight: bold; min-width: 44px; text-align: right; }
+    .trade-btn {
+      background: rgba(240, 185, 11, 0.12);
+      color: var(--yellow);
+      border: 1px solid var(--yellow);
+      padding: 4px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      text-decoration: none;
+      font-weight: bold;
+    }
 
-            return {
-                longPct,
-                shortPct,
-                text: `⚖️ <b>Long / Short Dağılımı:</b>\n[${bar}] %${longPct} Long | %${shortPct} Short (${sentiment})`
-            };
-        }
-    } catch (e) {}
-    return {
-        longPct: 50,
-        shortPct: 50,
-        text: `⚖️ <b>Long / Short Dağılımı:</b>\n[██████████░░░░░░░░░░] %50 Long | %50 Short (Dengeli)`
+    .loading-txt { text-align: center; color: var(--muted); padding: 20px; font-size: 11px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo">⚖️ L/S Pro & Liq</div>
+    <input type="text" id="searchInput" class="search-input" placeholder="🔍 Coin ara (BTC, SOL, DYM)..." oninput="handleSearch(this.value)">
+    <div class="price-box" id="btc-price">BTC: $--.--</div>
+  </header>
+
+  <div class="chart-controls">
+    <span class="active-coin-tag" id="chartSymbol">BTCUSDT</span>
+    <div class="tf-buttons">
+      <button class="tf-btn" onclick="setTimeframe('15m', this)">15d</button>
+      <button class="tf-btn active" onclick="setTimeframe('1h', this)">1s</button>
+      <button class="tf-btn" onclick="setTimeframe('4h', this)">4s</button>
+      <button class="tf-btn" onclick="setTimeframe('1d', this)">1G</button>
+    </div>
+  </div>
+
+  <div id="main-chart"></div>
+  <div id="osc-chart"></div>
+
+  <!-- 6'lı Bilgi Şeridi: Fiyat, Supertrend, Kanal ve Canlı Likidasyon Seviyeleri -->
+  <div class="indicator-strip">
+    <div class="stat-box">
+      <div class="stat-lbl">FİYAT</div>
+      <div class="stat-val" id="pDisplay">--</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-lbl">SUPERTREND</div>
+      <div class="stat-val" id="sBadge" style="color:var(--green);">--</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-lbl">KANAL DİRENÇ</div>
+      <div class="stat-val" id="uRes" style="color:var(--red);">--</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-lbl">KANAL DESTEK</div>
+      <div class="stat-val" id="lSup" style="color:var(--green);">--</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-lbl">🎯 LONG LİQ (25x)</div>
+      <div class="stat-val" id="liqLong" style="color:#ff8a80;">--</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-lbl">🎯 SHORT LİQ (25x)</div>
+      <div class="stat-val" id="liqShort" style="color:#80d8ff;">--</div>
+    </div>
+  </div>
+
+  <div class="scanner-section">
+    <div class="scanner-tabs">
+      <button class="tab-btn active" onclick="selectCategory('ALL', this)">Tümü (54)</button>
+      <button class="tab-btn" onclick="selectCategory('Bitcoin & Lider', this)">Bitcoin (1)</button>
+      <button class="tab-btn" onclick="selectCategory('Katman 1 & Ekosistem', this)">Katman 1 (15)</button>
+      <button class="tab-btn" onclick="selectCategory('Yapay Zeka (AI) & Veri', this)">AI (6)</button>
+      <button class="tab-btn" onclick="selectCategory('Meme Tokenlar', this)">Meme (7)</button>
+      <button class="tab-btn" onclick="selectCategory('DeFi & Oracle', this)">DeFi (12)</button>
+      <button class="tab-btn" onclick="selectCategory('Oyun & Metaverse', this)">Oyun (4)</button>
+      <button class="tab-btn" onclick="selectCategory('Diğer Popüler Altcoinler', this)">Diğer (9)</button>
+    </div>
+
+    <div class="scanner-sub">
+      <div class="sort-group">
+        <button class="sort-btn active" id="sort-default" onclick="changeSort('default', this)">Varsayılan</button>
+        <button class="sort-btn" id="sort-long" onclick="changeSort('long', this)">🔥 En Çok Long</button>
+        <button class="sort-btn" id="sort-short" onclick="changeSort('short', this)">🧊 En Çok Short</button>
+      </div>
+      <span id="update-timer" style="color:var(--yellow);">Yenileniyor...</span>
+    </div>
+
+    <div class="scanner-list" id="coin-list">
+      <div class="loading-txt">Piyasa verileri alınıyor...</div>
+    </div>
+  </div>
+
+  <script>
+    const COIN_GROUPS = {
+      "Bitcoin & Lider": ["BTC"],
+      "Katman 1 & Ekosistem": ["SOL", "AVAX", "NEAR", "SUI", "APT", "SEI", "TIA", "STRK", "ARB", "OP", "FTM", "ALGO", "ATOM", "ETC", "LTC", "BCH"],
+      "Yapay Zeka (AI) & Veri": ["TAO", "FET", "RENDER", "ARKM", "AR", "FIL"],
+      "Meme Tokenlar": ["DOGE", "1000PEPE", "1000SHIB", "WIF", "1000FLOKI", "1000BONK", "NEIRO"],
+      "DeFi & Oracle": ["LINK", "PYTH", "AAVE", "UNI", "CRV", "PENDLE", "GMX", "DYDX", "LDO", "ENA", "JUP", "JTO", "RUNE"],
+      "Oyun & Metaverse": ["GALA", "SAND", "MANA", "THETA"],
+      "Diğer Popüler Altcoinler": ["INJ", "STX", "ORDI", "WLD", "CFX", "NOT", "DYM", "ZRO", "W"]
     };
-}
 
-function build4HCandleReport(klines4h) {
-    if (!klines4h || klines4h.length < 3) return "";
+    let activeSymbol = 'BTCUSDT';
+    let activeInterval = '1h';
+    let currentCategory = 'ALL';
+    let currentSort = 'default';
+    let searchQuery = '';
+    
+    let ratioCache = {};
+    let tickerCache = {};
+    let fundingCache = {};
+    let oiCache = {};
 
-    const last3 = klines4h.slice(-3);
-    const labels = ["Mum 1 (8-12s)", "Mum 2 (4-8s) ", "Mum 3 (Son 4s)"];
-    const lines = [];
-    let netGain = 0;
+    let mChart, oChart, cSeries, stGreenSeries, stRedSeries, uSeries, lSeries, kSeries, dSeries;
+    let liqLongSeries, liqShortSeries; // Grafik üzerindeki Liq seviye çizgileri
 
-    for (let i = 0; i < 3; i++) {
-        const open = parseFloat(last3[i][1]);
-        const high = parseFloat(last3[i][2]);
-        const low = parseFloat(last3[i][3]);
-        const close = parseFloat(last3[i][4]);
+    function initCharts() {
+      const chartOptions = {
+        layout: { background: { color: '#0c0f17' }, textColor: '#848e9c', fontSize: 10 },
+        grid: { vertLines: { color: '#141822' }, horzLines: { color: '#141822' } },
+        crosshair: { mode: 1 },
+        timeScale: { visible: false }
+      };
 
-        const changePct = ((close - open) / open) * 100;
-        netGain += changePct;
+      mChart = LightweightCharts.createChart(document.getElementById('main-chart'), chartOptions);
 
-        const isBull = changePct >= 0;
-        const icon = isBull ? "🟢" : "🔴";
-        const sign = isBull ? "+" : "";
+      cSeries = mChart.addCandlestickSeries({
+        upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+        wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+      });
 
-        const rangePct = Math.abs(((high - low) / open) * 100);
+      stGreenSeries = mChart.addLineSeries({ color: '#26a69a', lineWidth: 2, lineType: 2 });
+      stRedSeries = mChart.addLineSeries({ color: '#ef5350', lineWidth: 2, lineType: 2 });
+      uSeries = mChart.addLineSeries({ color: '#f0b90b', lineWidth: 1.5 });
+      lSeries = mChart.addLineSeries({ color: '#f0b90b', lineWidth: 1.5 });
 
-        let barFill = Math.min(8, Math.max(1, Math.round(rangePct * 2)));
-        let bar = '█'.repeat(barFill) + '░'.repeat(8 - barFill);
+      // Dinamik Likidasyon Çizgileri (Grafik üzerinde kesik çizgiler)
+      liqLongSeries = mChart.addLineSeries({ color: '#ff5252', lineWidth: 1, lineStyle: 2 }); // Long Liq hedefi
+      liqShortSeries = mChart.addLineSeries({ color: '#40c4ff', lineWidth: 1, lineStyle: 2 }); // Short Liq hedefi
 
-        let tag = "Düşük";
-        if (rangePct >= 2.5) tag = isBull ? "Yüksek Alım 🔥" : "Yüksek Satış 🔥";
-        else if (rangePct >= 1.2) tag = "Orta";
+      oChart = LightweightCharts.createChart(document.getElementById('osc-chart'), {
+        layout: { background: { color: '#080a0f' }, textColor: '#6b7485', fontSize: 9 },
+        grid: { vertLines: { color: '#10141d' }, horzLines: { color: '#10141d' } },
+        priceScale: { autoScale: false, scaleMargins: { top: 0.1, bottom: 0.1 } },
+        timeScale: { borderColor: '#1f2535', timeVisible: true }
+      });
 
-        lines.push(` ${labels[i]}: ${icon} [${bar}] ${sign}${changePct.toFixed(1)}% | Genişlik: %${rangePct.toFixed(1)} (${tag})`);
+      // Stoch RSI Kılavuz Çizgileri (80 ve 20)
+      oChart.addLineSeries({ color: 'rgba(239, 83, 80, 0.4)', lineWidth: 1, lineStyle: 2 }).setData([
+        { time: 0, value: 80 }, { time: 9999999999, value: 80 }
+      ]);
+      oChart.addLineSeries({ color: 'rgba(38, 166, 154, 0.4)', lineWidth: 1, lineStyle: 2 }).setData([
+        { time: 0, value: 20 }, { time: 9999999999, value: 20 }
+      ]);
+
+      kSeries = oChart.addLineSeries({ color: '#2962ff', lineWidth: 1.5 });
+      dSeries = oChart.addLineSeries({ color: '#ff6d00', lineWidth: 1.5 });
+
+      mChart.timeScale().subscribeVisibleLogicalRangeChange(r => {
+        if (r && oChart) oChart.timeScale().setVisibleLogicalRange(r);
+      });
+      oChart.timeScale().subscribeVisibleLogicalRangeChange(r => {
+        if (r && mChart) mChart.timeScale().setVisibleLogicalRange(r);
+      });
+
+      window.addEventListener('resize', () => {
+        if (mChart) mChart.applyOptions({ width: document.getElementById('main-chart').clientWidth });
+        if (oChart) oChart.applyOptions({ width: document.getElementById('osc-chart').clientWidth });
+      });
     }
 
-    let netTrendText = "⚪ Yatay / Kararsız Seyir";
-    if (netGain >= 1.5) netTrendText = "🟢 Güçlü Boğa Baskısı (Bull Dominance)";
-    else if (netGain <= -1.5) netTrendText = "🔴 Güçlü Ayı Baskısı (Bear Dominance)";
-
-    return `🕯️ <b>4H Mum Yapısı (Son 12 Saat & Genişlik):</b>\n<pre>${lines.join('\n')}\n ↳ Net Yön: ${netTrendText}</pre>`;
-}
-
-// ==========================================
-// 5. TEKNİK İNDİKATÖR FONKSİYONLARI
-// ==========================================
-function calculateRSI(closes, period = 14) {
-    if (!Array.isArray(closes) || closes.length < period + 1) return 50;
-
-    let gains = 0;
-    let losses = 0;
-
-    for (let i = 1; i <= period; i++) {
-        const change = closes[i] - closes[i - 1];
-        if (change > 0) gains += change;
-        else losses += Math.abs(change);
-    }
-
-    let avgGain = gains / period;
-    let avgLoss = losses / period;
-
-    for (let i = period + 1; i < closes.length; i++) {
-        const change = closes[i] - closes[i - 1];
-        const gain = change > 0 ? change : 0;
-        const loss = change < 0 ? Math.abs(change) : 0;
-
-        avgGain = (avgGain * (period - 1) + gain) / period;
-        avgLoss = (avgLoss * (period - 1) + loss) / period;
-    }
-
-    if (avgLoss === 0) return avgGain === 0 ? 50 : 100;
-    if (avgGain === 0) return 0;
-
-    const rs = avgGain / avgLoss;
-    return Math.round(100 - (100 / (1 + rs)));
-}
-
-function calculateEMA(closes, period = 50) {
-    if (!Array.isArray(closes) || closes.length < period) return null;
-    const k = 2 / (period + 1);
-    let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
-
-    for (let i = period; i < closes.length; i++) {
-        ema = (closes[i] * k) + (ema * (1 - k));
-    }
-    return ema;
-}
-
-function calculateATR(highs, lows, closes, period = 14) {
-    if (closes.length < period + 1) return null;
-    const trs = [];
-
-    for (let i = 1; i < closes.length; i++) {
-        const hl = highs[i] - lows[i];
-        const hc = Math.abs(highs[i] - closes[i - 1]);
-        const lc = Math.abs(lows[i] - closes[i - 1]);
-        trs.push(Math.max(hl, hc, lc));
-    }
-
-    const recentTrs = trs.slice(-period);
-    return recentTrs.reduce((a, b) => a + b, 0) / period;
-}
-
-async function fetchBybitKlines(symbol, interval, limit) {
-    try {
-        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`;
-        const json = await fetchJSON(url, { 'User-Agent': 'ScalpProMultiTF/3.0' });
-        if (json.retCode !== 0 || !json.result || !json.result.list || json.result.list.length < 20) return null;
-        return json.result.list.slice().reverse();
-    } catch (e) {
-        return null;
-    }
-}
-
-async function checkBtcCondition() {
-    const list = await fetchBybitKlines("BTCUSDT", "15", 30);
-    if (!list || list.length < 3) return { safe: true, btcTrend: "NEUTRAL", change15m: "0.00" };
-
-    const currentPrice = parseFloat(list[list.length - 1][4]);
-    const pricePrev = parseFloat(list[list.length - 2][1]);
-    const change15m = ((currentPrice - pricePrev) / pricePrev) * 100;
-
-    const isVolatile = Math.abs(change15m) >= 1.5;
-    let btcTrend = "NEUTRAL";
-    if (change15m <= -0.70) btcTrend = "DUMP";
-    else if (change15m >= 0.70) btcTrend = "PUMP";
-
-    return {
-        safe: !isVolatile,
-        btcTrend,
-        change15m: change15m.toFixed(2)
-    };
-}
-
-// ==========================================
-// 6. CANLI İŞLEM TAKİBİ
-// ==========================================
-async function checkActiveTrades(symbol, currentPrice) {
-    const trade = activeTrades.get(symbol);
-    if (!trade) return;
-
-    const cleanSymbol = symbol.replace('USDT', '');
-    const nowTime = getTurkishTimeString();
-
-    if (trade.side === 'LONG') {
-        if (!trade.tp1Hit && currentPrice >= trade.tp1) {
-            trade.tp1Hit = true;
-            trade.sl = trade.entry;
-            tradeHistory.push({ type: 'TP', time: Date.now() });
-
-            const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
-            const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🟢 LONG (4H Trend Destekli)\n` +
-                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                           `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
-                           `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n\n` +
-                           `${getStatsText()}\n` +
-                           `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(tp1Msg);
+    function computeSuperTrend(candles, period = 10, mult = 3.0) {
+      let atr = [], upperBand = [], lowerBand = [];
+      for (let i = 0; i < candles.length; i++) {
+        if (i === 0) {
+          atr.push(candles[i].high - candles[i].low);
+        } else {
+          let tr = Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i-1].close), Math.abs(candles[i].low - candles[i-1].close));
+          atr.push((atr[i-1] * (period - 1) + tr) / period);
         }
+        let hl2 = (candles[i].high + candles[i].low) / 2;
+        upperBand.push(hl2 + mult * atr[i]);
+        lowerBand.push(hl2 - mult * atr[i]);
+      }
 
-        if (currentPrice >= trade.tp2) {
-            tradeHistory.push({ type: 'TP', time: Date.now() });
-            const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
-            const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🟢 LONG (4H Trend Destekli)\n` +
-                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                           `🎯 <b>TP2 Fiyatı:</b> $${formatPrice(trade.tp2, trade.entry)}\n` +
-                           `🚀 <b>Net Kazanç:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🎉 <i>Tebrikler! Pozisyon tamamen kârla kapatıldı.</i>\n\n` +
-                           `${getStatsText()}\n` +
-                           `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(tp2Msg);
-            activeTrades.delete(symbol);
-            return;
-        }
+      let inUpTrend = true;
+      let finalUpper = [...upperBand], finalLower = [...lowerBand];
+      let greenData = [], redData = [], markers = [];
 
-        if (currentPrice <= trade.sl) {
-            tradeHistory.push({ type: 'STOP', time: Date.now() });
-            const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
-            const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
-                            `🎯 <b>Yön:</b> 🟢 LONG (4H Trend Destekli)\n` +
-                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                            `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n\n` +
-                            `${getStatsText()}\n` +
-                            `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(stopMsg);
-            activeTrades.delete(symbol);
-            return;
+      for (let i = 1; i < candles.length; i++) {
+        if (lowerBand[i] > finalLower[i-1] || candles[i-1].close < finalLower[i-1]) finalLower[i] = lowerBand[i];
+        else finalLower[i] = finalLower[i-1];
+
+        if (upperBand[i] < finalUpper[i-1] || candles[i-1].close > finalUpper[i-1]) finalUpper[i] = upperBand[i];
+        else finalUpper[i] = finalUpper[i-1];
+
+        let prevTrend = inUpTrend;
+        if (inUpTrend && candles[i].close < finalLower[i]) inUpTrend = false;
+        else if (!inUpTrend && candles[i].close > finalUpper[i]) inUpTrend = true;
+
+        if (inUpTrend) {
+          greenData.push({ time: candles[i].time, value: finalLower[i] });
+          if (!prevTrend) markers.push({ time: candles[i].time, position: 'belowBar', color: '#26a69a', shape: 'arrowUp', text: 'AL' });
+        } else {
+          redData.push({ time: candles[i].time, value: finalUpper[i] });
+          if (prevTrend) markers.push({ time: candles[i].time, position: 'aboveBar', color: '#ef5350', shape: 'arrowDown', text: 'SAT' });
         }
+      }
+      return { greenData, redData, inUpTrend, markers };
     }
 
-    if (trade.side === 'SHORT') {
-        if (!trade.tp1Hit && currentPrice <= trade.tp1) {
-            trade.tp1Hit = true;
-            trade.sl = trade.entry;
-            tradeHistory.push({ type: 'TP', time: Date.now() });
+    function computeDynamicChannel(candles) {
+      const n = candles.length;
+      let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+      for (let i = 0; i < n; i++) {
+        const p = candles[i].close;
+        sumX += i; sumY += p; sumXY += i * p; sumXX += i * i;
+      }
+      const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+      const intercept = (sumY - slope * sumX) / n;
 
-            const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
-            const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🔴 SHORT (4H Trend Destekli)\n` +
-                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                           `🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n` +
-                           `💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi. Risk sıfırlandı!\n\n` +
-                           `${getStatsText()}\n` +
-                           `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(tp1Msg);
-        }
+      let maxAbove = 0, maxBelow = 0;
+      for (let i = 0; i < n; i++) {
+        const reg = intercept + slope * i;
+        maxAbove = Math.max(maxAbove, candles[i].high - reg);
+        maxBelow = Math.max(maxBelow, reg - candles[i].low);
+      }
 
-        if (currentPrice <= trade.tp2) {
-            tradeHistory.push({ type: 'TP', time: Date.now() });
-            const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
-            const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
-                           `🎯 <b>Yön:</b> 🔴 SHORT (4H Trend Destekli)\n` +
-                           `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                           `🎯 <b>TP2 Fiyatı:</b> $${formatPrice(trade.tp2, trade.entry)}\n` +
-                           `🚀 <b>Net Kazanç:</b> +%${gainPct} (10x Kaldıraç ile +%${(gainPct * 10).toFixed(1)})\n\n` +
-                           `🎉 <i>Tebrikler! Pozisyon tamamen kârla kapatıldı.</i>\n\n` +
-                           `${getStatsText()}\n` +
-                           `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(tp2Msg);
-            activeTrades.delete(symbol);
-            return;
-        }
-
-        if (currentPrice >= trade.sl) {
-            tradeHistory.push({ type: 'STOP', time: Date.now() });
-            const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
-            const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
-                            `🎯 <b>Yön:</b> 🔴 SHORT (4H Trend Destekli)\n` +
-                            `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
-                            `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n\n` +
-                            `${getStatsText()}\n` +
-                            `⏱ <b>${nowTime} (TSİ)</b>`;
-            await sendTelegramMessage(stopMsg);
-            activeTrades.delete(symbol);
-            return;
-        }
+      let uL = [], lL = [];
+      for (let i = 0; i < n; i++) {
+        const t = candles[i].time;
+        const reg = intercept + slope * i;
+        uL.push({ time: t, value: reg + maxAbove });
+        lL.push({ time: t, value: reg - maxBelow });
+      }
+      return { uL, lL };
     }
 
-    if (Date.now() - trade.time > 6 * 60 * 60 * 1000) {
-        activeTrades.delete(symbol);
+    function computeStochRSI(candles) {
+      let rsiLen = 14, kArr = [], dArr = [];
+      for (let i = rsiLen; i < candles.length; i++) {
+        let slice = candles.slice(i - rsiLen, i + 1).map(c => c.close);
+        let max = Math.max(...slice), min = Math.min(...slice);
+        let stoch = max === min ? 50 : Math.min(100, Math.max(0, ((candles[i].close - min) / (max - min)) * 100));
+        kArr.push({ time: candles[i].time, value: stoch });
+      }
+      for (let i = 2; i < kArr.length; i++) {
+        let avg = (kArr[i].value + kArr[i-1].value + kArr[i-2].value) / 3;
+        dArr.push({ time: kArr[i].time, value: avg });
+      }
+      return { kArr, dArr };
     }
-}
 
-// ==========================================
-// 7. HABER & SEANS RADARI
-// ==========================================
-async function checkBreakingNews() {
-    try {
-        const now = Date.now();
-        if (now - lastNewsCheckTime < 60 * 1000) return;
-        lastNewsCheckTime = now;
+    async function loadChartData() {
+      try {
+        document.getElementById('chartSymbol').innerText = activeSymbol;
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${activeSymbol}&interval=${activeInterval}&limit=90`);
+        const data = await res.json();
+        const candles = data.map(d => ({ time: d[0]/1000, open: +d[1], high: +d[2], low: +d[3], close: +d[4] }));
+        
+        const last = candles[candles.length - 1];
+        const dec = last.close < 0.05 ? 5 : (last.close < 1 ? 4 : 2);
 
-        const data = await fetchJSON('https://cryptopanic.com/api/free/v1/posts/?public=true');
-        if (!data || !data.results || !Array.isArray(data.results)) return;
+        cSeries.applyOptions({ priceFormat: { type: 'price', precision: dec, minMove: 1 / Math.pow(10, dec) } });
+        cSeries.setData(candles);
 
-        for (const item of data.results.slice(0, 15)) {
-            const newsId = item.id.toString();
-            if (processedNewsIds.has(newsId)) continue;
-            processedNewsIds.add(newsId);
+        document.getElementById('pDisplay').innerText = '$' + last.close.toFixed(dec);
 
-            if (processedNewsIds.size > 300) {
-                const firstKey = processedNewsIds.values().next().value;
-                processedNewsIds.delete(firstKey);
-            }
+        // Supertrend
+        const st = computeSuperTrend(candles);
+        stGreenSeries.setData(st.greenData);
+        stRedSeries.setData(st.redData);
+        cSeries.setMarkers(st.markers);
+        
+        const sb = document.getElementById('sBadge');
+        sb.innerText = st.inUpTrend ? '🟢 AL' : '🔴 SAT';
+        sb.style.color = st.inUpTrend ? 'var(--green)' : 'var(--red)';
 
-            const title = (item.title || "").trim();
-            const lowerTitle = title.toLowerCase();
+        // Kanal
+        const ch = computeDynamicChannel(candles);
+        uSeries.setData(ch.uL);
+        lSeries.setData(ch.lL);
+        document.getElementById('uRes').innerText = '$' + ch.uL[ch.uL.length - 1].value.toFixed(dec);
+        document.getElementById('lSup').innerText = '$' + ch.lL[ch.lL.length - 1].value.toFixed(dec);
 
-            let matchedCoin = null;
+        // Likidasyon Seviyeleri Modeli (25x ortalama kaldıraç varsayımı: ~%3.85 marj mesafesi)
+        const curPrice = last.close;
+        const lLiqVal = curPrice * (1 - 0.0385);
+        const sLiqVal = curPrice * (1 + 0.0385);
 
-            for (const [ticker, aliases] of Object.entries(COIN_ALIASES)) {
-                if (aliases.some(alias => new RegExp(`\\b${alias}\\b`, 'i').test(lowerTitle))) {
-                    matchedCoin = ticker;
-                    break;
-                }
-            }
+        document.getElementById('liqLong').innerText = '$' + lLiqVal.toFixed(dec);
+        document.getElementById('liqShort').innerText = '$' + sLiqVal.toFixed(dec);
 
-            if (!matchedCoin) {
-                for (const sym of TARGET_COINS) {
-                    const clean = sym.replace('USDT', '').replace('1000', '');
-                    const regex = new RegExp(`\\b${clean}\\b`, 'i');
-                    if (regex.test(lowerTitle)) {
-                        matchedCoin = clean;
-                        break;
-                    }
-                }
-            }
+        // Son 20 mum boyunca yatay seviye çizgisi çiz
+        const recentCandles = candles.slice(-20);
+        liqLongSeries.setData(recentCandles.map(c => ({ time: c.time, value: lLiqVal })));
+        liqShortSeries.setData(recentCandles.map(c => ({ time: c.time, value: sLiqVal })));
 
-            const isMacroOrBtc = lowerTitle.includes('bitcoin') || lowerTitle.includes('btc') ||
-                                 CRITICAL_KEYWORDS.some(kw => lowerTitle.includes(kw));
+        // Stoch RSI
+        const { kArr, dArr } = computeStochRSI(candles);
+        kSeries.setData(kArr);
+        dSeries.setData(dArr);
 
-            if (matchedCoin) {
-                const newsMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `📰 <b>FLAŞ HABER RADARI | #${matchedCoin}</b>\n\n` +
-                                `📢 <b>Başlık:</b> ${title}\n\n` +
-                                `⚠️ <b>Etki:</b> Paritede volatilite ve hacim artışı bekleniyor!\n\n` +
-                                `⚠️ <i>"YTD" HEPSİ.</i>`;
-                await sendTelegramMessage(newsMsg);
-                await sleep(1000);
-            } else if (isMacroOrBtc) {
-                const macroMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                 `🚨 <b>PİYASA GENELİ SICAK GELİŞME (BTC / MAKRO)</b>\n\n` +
-                                 `📢 <b>Haber:</b> ${title}\n\n` +
-                                 `🛑 Dalgalanma durumunda sinyaller kilitlenebilir.\n\n` +
-                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
-                await sendTelegramMessage(macroMsg);
-                await sleep(1000);
-            }
+        mChart.timeScale().fitContent();
+        oChart.timeScale().fitContent();
+      } catch (e) {
+        console.error("Grafik yükleme hatası:", e);
+      }
+    }
+
+    function setCoin(sym) {
+      activeSymbol = sym.endsWith('USDT') ? sym : sym + 'USDT';
+      document.getElementById('searchInput').value = '';
+      searchQuery = '';
+      loadChartData();
+      renderList();
+    }
+
+    function setTimeframe(tf, btn) {
+      activeInterval = tf;
+      document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadChartData();
+    }
+
+    function selectCategory(cat, btn) {
+      currentCategory = cat;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderList();
+    }
+
+    function changeSort(sort, btn) {
+      currentSort = sort;
+      document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderList();
+    }
+
+    function handleSearch(val) {
+      searchQuery = val.trim().toUpperCase();
+      renderList();
+    }
+
+    async function initBtcPrice() {
+      try {
+        const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT');
+        const d = await res.json();
+        if (d && d.price) {
+          document.getElementById('btc-price').innerText = `BTC: $${parseFloat(d.price).toFixed(1)}`;
         }
-    } catch (e) {
-        console.error("Haber kontrol hatası:", e.message);
-    }
-}
+      } catch(e) {}
 
-async function checkSessionAlerts() {
-    const now = new Date();
-    const trHour = (now.getUTCHours() + 3) % 24;
-    const trMinute = now.getUTCMinutes();
-    const todayStr = now.toISOString().slice(0, 10);
-
-    if (lastNotifiedEvents.date !== todayStr) {
-        lastNotifiedEvents = {
-            date: todayStr,
-            approachingNY: false,
-            openNY: false,
-            closeNY: false
+      try {
+        const btcWs = new WebSocket('wss://fstream.binance.com/ws/btcusdt@ticker');
+        btcWs.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          document.getElementById('btc-price').innerText = `BTC: $${parseFloat(data.c).toFixed(1)}`;
         };
+      } catch(e) {}
     }
 
-    if (trHour === 16 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.approachingNY) {
-        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                    `⏳ <b>DİKKAT: EN HAREKETLİ SEANSA 30 DAKİKA KALDI!</b>\n\n` +
-                    `🗽 <b>16:30'da ABD (Wall Street) Piyasaları Açılıyor!</b>\n` +
-                    `• ETF işlemleri ve fonlar piyasaya girmek üzere.\n\n` +
-                    `⚠️ <i>"YTD" HEPSİ.</i>`;
-        await sendTelegramMessage(msg);
-        lastNotifiedEvents.approachingNY = true;
+    async function fetchLSRatio(symbol) {
+      try {
+        const res = await fetch(`https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=5m&limit=1`);
+        const data = await res.json();
+        if (data && data.length > 0) {
+          const longPct = Math.round(parseFloat(data[0].longAccount) * 100);
+          const shortPct = Math.round(parseFloat(data[0].shortAccount) * 100);
+          const ratio = parseFloat(data[0].longShortRatio).toFixed(2);
+          return { longPct, shortPct, ratio };
+        }
+      } catch (e) {}
+      return { longPct: 50, shortPct: 50, ratio: "1.00" };
     }
 
-    if (trHour === 16 && trMinute >= 30 && trMinute < 40 && !lastNotifiedEvents.openNY) {
-        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                    `🔥 <b>NEW YORK (WALL STREET) SEANSI RESMEN AÇILDI!</b>\n\n` +
-                    `⚡ Günün en yüksek hacimli dönemi devrede.\n\n` +
-                    `⚠️ <i>"YTD" HEPSİ.</i>`;
-        await sendTelegramMessage(msg);
-        lastNotifiedEvents.openNY = true;
+    async function fetchOpenInterest(symbol) {
+      try {
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${symbol}`);
+        const data = await res.json();
+        if (data && data.openInterest) {
+          return parseFloat(data.openInterest);
+        }
+      } catch (e) {}
+      return 0;
     }
 
-    if (trHour === 23 && trMinute >= 0 && trMinute < 10 && !lastNotifiedEvents.closeNY) {
-        const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                    `🌙 <b>NEW YORK SEANSI KAPANDI (PİYASA SAKİNLEŞİYOR)</b>\n\n` +
-                    `💤 ABD borsaları kapandı, ana hacim dalgası sona erdi.\n\n` +
-                    `⚠️ <i>"YTD" HEPSİ.</i>`;
-        await sendTelegramMessage(msg);
-        lastNotifiedEvents.closeNY = true;
-    }
-}
-
-// ==========================================
-// 8. ÖZEL İSTEK (ON-DEMAND) ANALİZ MOTORU
-// ==========================================
-async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
-    let clean = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (!clean.endsWith('USDT')) clean += 'USDT';
-
-    // 1000PEPE, 1000SHIB gibi türev pariteleri otomatik kontrol et
-    let symbol = clean;
-    let klines15m = await fetchBybitKlines(symbol, "15", 50);
-    if (!klines15m && !symbol.startsWith('1000')) {
-        symbol = '1000' + clean;
-        klines15m = await fetchBybitKlines(symbol, "15", 50);
+    function getAllCoinsFlat() {
+      let list = [];
+      for (const [category, coins] of Object.entries(COIN_GROUPS)) {
+        coins.forEach(coin => list.push({ coin, category }));
+      }
+      return list;
     }
 
-    if (!klines15m || klines15m.length < 30) {
-        await sendTelegramMessage(`⚠️ <b>#${clean}</b> için Bybit Futures verisi bulunamadı. Lütfen sembolü kontrol ediniz.`, replyToId);
+    async function refreshData() {
+      document.getElementById('update-timer').innerText = "Veriler çekiliyor...";
+      
+      // 1. Ticker Verileri
+      try {
+        const tRes = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
+        const tData = await tRes.json();
+        tData.forEach(item => {
+          tickerCache[item.symbol] = {
+            price: parseFloat(item.lastPrice),
+            change24h: parseFloat(item.priceChangePercent)
+          };
+        });
+      } catch (e) {}
+
+      // 2. Fonlama Oranları
+      try {
+        const fRes = await fetch('https://fapi.binance.com/fapi/v1/premiumIndex');
+        const fData = await fRes.json();
+        fData.forEach(item => {
+          fundingCache[item.symbol] = (parseFloat(item.lastFundingRate) * 100).toFixed(3);
+        });
+      } catch(e) {}
+
+      // 3. Long/Short ve OI
+      const coins = getAllCoinsFlat();
+      const chunkSize = 8;
+      for (let i = 0; i < coins.length; i += chunkSize) {
+        const chunk = coins.slice(i, i + chunkSize);
+        await Promise.all(chunk.map(async item => {
+          const binanceSymbol = item.coin + "USDT";
+          const [ls, oi] = await Promise.all([
+            fetchLSRatio(binanceSymbol),
+            fetchOpenInterest(binanceSymbol)
+          ]);
+          ratioCache[item.coin] = ls;
+          oiCache[item.coin] = oi;
+        }));
+      }
+
+      document.getElementById('update-timer').innerText = `Son Güncelleme: ${new Date().toLocaleTimeString('tr-TR')}`;
+      renderList();
+    }
+
+    function renderList() {
+      const listEl = document.getElementById('coin-list');
+      listEl.innerHTML = '';
+
+      let coins = getAllCoinsFlat();
+
+      if (currentCategory !== 'ALL') {
+        coins = coins.filter(c => c.category === currentCategory);
+      }
+
+      if (searchQuery) {
+        coins = coins.filter(c => c.coin.toUpperCase().includes(searchQuery));
+      }
+
+      if (currentSort === 'long') {
+        coins.sort((a, b) => {
+          const rA = ratioCache[a.coin] ? ratioCache[a.coin].longPct : 50;
+          const rB = ratioCache[b.coin] ? ratioCache[b.coin].longPct : 50;
+          return rB - rA;
+        });
+      } else if (currentSort === 'short') {
+        coins.sort((a, b) => {
+          const rA = ratioCache[a.coin] ? ratioCache[a.coin].shortPct : 50;
+          const rB = ratioCache[b.coin] ? ratioCache[b.coin].shortPct : 50;
+          return rB - rA;
+        });
+      }
+
+      if (coins.length === 0) {
+        listEl.innerHTML = `<div class="loading-txt">Eşleşen coin bulunamadı.</div>`;
         return;
+      }
+
+      coins.forEach(item => {
+        const data = ratioCache[item.coin] || { longPct: 50, shortPct: 50, ratio: "1.00" };
+        const fullSymbol = item.coin + "USDT";
+        const ticker = tickerCache[fullSymbol] || { price: 0, change24h: 0 };
+        const funding = fundingCache[fullSymbol] || "0.000";
+        const rawOI = oiCache[item.coin] || 0;
+
+        const isCurrent = activeSymbol === fullSymbol;
+        const ratioColor = parseFloat(data.ratio) >= 1 ? 'var(--green)' : 'var(--red)';
+
+        // Fiyat Formatı
+        const priceDec = ticker.price < 0.05 ? 5 : (ticker.price < 1 ? 4 : 2);
+        const priceStr = ticker.price === 0 ? '--' : '$' + ticker.price.toFixed(priceDec);
+        const changeStr = ticker.change24h >= 0 ? `+${ticker.change24h.toFixed(1)}%` : `${ticker.change24h.toFixed(1)}%`;
+        const changeClass = ticker.change24h >= 0 ? 'badge-pnl-up' : 'badge-pnl-down';
+
+        // Açık Faiz
+        const oiValUSD = rawOI * ticker.price;
+        let oiStr = '--';
+        if (oiValUSD >= 1000000) oiStr = `$${(oiValUSD / 1000000).toFixed(1)}M`;
+        else if (oiValUSD > 0) oiStr = `$${(oiValUSD / 1000).toFixed(0)}K`;
+
+        // En Yakın Liq Mesafesi Hesaplayıcı
+        // Eğer Long %65+ ise piyasa Long patlatmaya meyillidir (aşağı Liq mesafesi)
+        // Değilse yukarı Liq mesafesi hedeflenir
+        const isLongHeavy = data.longPct >= 50;
+        const targetLiqDst = isLongHeavy ? "-%3.8" : "+%3.8";
+
+        // Squeeze Riski
+        let riskBadge = '';
+        if (data.longPct >= 72) riskBadge = `<span class="tag-squeeze squeeze-l">⚠️ L-Squeeze</span>`;
+        else if (data.shortPct >= 72) riskBadge = `<span class="tag-squeeze squeeze-s">⚠️ S-Squeeze</span>`;
+
+        const card = document.createElement('div');
+        card.className = `coin-card ${isCurrent ? 'active-card' : ''}`;
+        card.onclick = () => setCoin(item.coin);
+
+        card.innerHTML = `
+          <div class="coin-left">
+            <div class="coin-sym">${item.coin}</div>
+            <div class="coin-price-row">
+              <span>${priceStr}</span>
+              <span class="${changeClass}">(${changeStr})</span>
+            </div>
+            <div class="tag-row">
+              <span class="tag-fund">F: ${funding}%</span>
+              <span class="tag-oi">OI: ${oiStr}</span>
+              <span class="tag-liq-dst">Liq: ${targetLiqDst}</span>
+              ${riskBadge}
+            </div>
+          </div>
+
+          <div class="coin-center">
+            <div class="ratio-labels">
+              <span class="l-txt">Long %${data.longPct}</span>
+              <span class="s-txt">Short %${data.shortPct}</span>
+            </div>
+            <div class="bar-bg">
+              <div class="bar-fill" style="width: ${data.longPct}%;"></div>
+            </div>
+          </div>
+
+          <div class="coin-right">
+            <span class="ratio-badge" style="color: ${ratioColor};">${data.ratio}x</span>
+            <a href="https://www.binance.com/tr/futures/${item.coin}USDT" target="_blank" class="trade-btn" onclick="event.stopPropagation()">Al/Sat 🔗</a>
+          </div>
+        `;
+
+        listEl.appendChild(card);
+      });
     }
 
-    const klines4h = await fetchBybitKlines(symbol, "240", 60);
-    if (!klines4h || klines4h.length < 25) {
-        await sendTelegramMessage(`⚠️ <b>#${clean}</b> için 4 saatlik grafik verisi yetersiz.`, replyToId);
-        return;
-    }
+    document.getElementById('searchInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        const val = e.target.value.trim().toUpperCase();
+        if (val) setCoin(val);
+      }
+    });
 
-    const closes15 = klines15m.map(k => parseFloat(k[4]));
-    const currentPrice = closes15[closes15.length - 1];
-    const rsi15m = calculateRSI(closes15, 14);
-
-    const closes4h = klines4h.map(k => parseFloat(k[4]));
-    const rsi4h = calculateRSI(closes4h, 14);
-    const ema50_4h = calculateEMA(closes4h, 50) || calculateEMA(closes4h, 20);
-
-    let trendText = "⚪ Yatay / Kararsız";
-    if (currentPrice > ema50_4h && rsi4h >= 50) trendText = "🟢 Yükseliş Trendi (Boğa)";
-    else if (currentPrice < ema50_4h && rsi4h <= 50) trendText = "🔴 Düşüş Trendi (Ayı)";
-
-    const lsData = await fetchLongShortRatio(symbol);
-    const candleReportText = build4HCandleReport(klines4h);
-
-    let verdict = "⚪ Nötr / Bekle-Gör";
-    if (rsi15m <= 35 && currentPrice > ema50_4h && lsData.longPct < 65) {
-        verdict = "🟢 LONG Fırsat Bölgesi (4H Trend Destekli Dip)";
-    } else if (rsi15m >= 65 && currentPrice < ema50_4h && lsData.shortPct < 65) {
-        verdict = "🔴 SHORT Fırsat Bölgesi (4H Düşüş Destekli Tepe)";
-    } else if (lsData.longPct >= 65) {
-        verdict = "⚠️ Aşırı Long Yığılması (Likidasyon / Düşüş Riski)";
-    } else if (lsData.shortPct >= 65) {
-        verdict = "⚠️ Aşırı Short Yığılması (Squeeze / Pump Riski)";
-    }
-
-    const binanceUrl = `https://www.binance.com/tr/futures/${symbol}`;
-    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                      `🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n` +
-                      `💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
-                      `🧭 <b>4H Ana Trend:</b> ${trendText} (RSI: ${rsi4h})\n` +
-                      `⚡ <b>15dk RSI:</b> ${rsi15m}\n` +
-                      `🎯 <b>Sistem Değerlendirmesi:</b> <b>${verdict}</b>\n\n` +
-                      `${lsData.text}\n\n` +
-                      `${candleReportText}\n\n` +
-                      `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
-                      `⚠️ <i>"YTD" HEPSİ.</i>`;
-
-    await sendTelegramMessage(reportMsg, replyToId);
-}
-
-// Telegram mesajlarını yakalama motoru
-async function pollTelegramUpdates() {
-    try {
-        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=5`;
-        const res = await fetchJSON(url);
-
-        if (res.ok && Array.isArray(res.result)) {
-            for (const upd of res.result) {
-                lastUpdateId = upd.update_id;
-
-                const message = upd.message || upd.channel_post;
-                if (!message || !message.text) continue;
-
-                let txt = message.text.trim();
-                
-                // Örnek komutlar: "SOL", "/analiz SOL", "BTC analiz", "WLD"
-                let targetCoin = null;
-                if (txt.startsWith('/analiz')) {
-                    const parts = txt.split(' ');
-                    if (parts[1]) targetCoin = parts[1];
-                } else if (txt.length >= 2 && txt.length <= 12 && !txt.includes(' ') && !txt.startsWith('/')) {
-                    targetCoin = txt;
-                } else if (txt.toLowerCase().includes('analiz')) {
-                    const parts = txt.split(' ');
-                    targetCoin = parts[0] === 'analiz' ? parts[1] : parts[0];
-                }
-
-                if (targetCoin) {
-                    await analyzeSpecificCoin(targetCoin, message.message_id);
-                }
-            }
-        }
-    } catch (e) {
-        // Sessiz devam et
-    }
-}
-
-// ==========================================
-// 9. MULTI-TIMEFRAME (4H + 15M) TARAMA MOTORU
-// ==========================================
-async function scanMarket() {
-    try {
-        await checkSessionAlerts();
-        await checkBreakingNews();
-
-        const session = getActiveSessionName();
-        console.log(`55 Parite (4H Trend + 15M Tetik + Sıkı Filtre) taranıyor [${session}]...`, getTurkishTimeString());
-
-        const btc = await checkBtcCondition();
-        if (!btc.safe) {
-            console.log(`⚠️ BTC aşırı dalgalandı (%${btc.change15m}). Bu tur sinyaller kilitlendi.`);
-            return;
-        }
-
-        let signalSentInThisCycle = false;
-        let scannedCount = 0;
-        let trendBlockedCount = 0;
-        let rsiNeutralCount = 0;
-
-        for (const symbol of TARGET_COINS) {
-            const klines15m = await fetchBybitKlines(symbol, "15", 50);
-            await sleep(80);
-
-            if (!klines15m || klines15m.length < 35) continue;
-            scannedCount++;
-
-            const opens15 = klines15m.map(k => parseFloat(k[1]));
-            const highs15 = klines15m.map(k => parseFloat(k[2]));
-            const lows15 = klines15m.map(k => parseFloat(k[3]));
-            const closes15 = klines15m.map(k => parseFloat(k[4]));
-
-            const currentPrice = closes15[closes15.length - 1];
-            const currentOpen = opens15[opens15.length - 1];
-            const currentHigh = highs15[highs15.length - 1];
-            const currentLow = lows15[lows15.length - 1];
-
-            await checkActiveTrades(symbol, currentPrice);
-
-            const rsi15m = calculateRSI(closes15, 14);
-
-            const isPotentialLong = (rsi15m <= 35);
-            const isPotentialShort = (rsi15m >= 65);
-
-            if (!isPotentialLong && !isPotentialShort) {
-                rsiNeutralCount++;
-                continue;
-            }
-
-            const klines4h = await fetchBybitKlines(symbol, "240", 60);
-            await sleep(80);
-
-            if (!klines4h || klines4h.length < 25) continue;
-
-            const closes4h = klines4h.map(k => parseFloat(k[4]));
-            const rsi4h = calculateRSI(closes4h, 14);
-            const ema50_4h = calculateEMA(closes4h, 50) || calculateEMA(closes4h, 20);
-
-            let mainTrend = "NEUTRAL";
-            if (currentPrice > ema50_4h && rsi4h >= 50) mainTrend = "BULL";
-            else if (currentPrice < ema50_4h && rsi4h <= 50) mainTrend = "BEAR";
-
-            const last3_4h = klines4h.slice(-3);
-            const m2_open = parseFloat(last3_4h[1][1]);
-            const m2_close = parseFloat(last3_4h[1][4]);
-            const m3_open = parseFloat(last3_4h[2][1]);
-            const m3_close = parseFloat(last3_4h[2][4]);
-
-            const m2_isRed = m2_close < m2_open;
-            const m3_isRed = m3_close < m3_open;
-            const m2_isGreen = m2_close > m2_open;
-            const m3_isGreen = m3_close > m3_open;
-
-            const twoConsecutiveReds = (m2_isRed && m3_isRed);
-            const twoConsecutiveGreens = (m2_isGreen && m3_isGreen);
-
-            const lsData = await fetchLongShortRatio(symbol);
-
-            const atr15 = calculateATR(highs15, lows15, closes15, 14);
-            const now = Date.now();
-            const cleanSymbol = symbol.replace('USDT', '');
-            const binanceUrl = `https://www.binance.com/tr/futures/${symbol}`;
-
-            let signal = null;
-
-            const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.35);
-            if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && lsData.longPct < 65 && !twoConsecutiveReds) {
-                const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
-                const sl = currentPrice - stopDist;
-                const tp1 = currentPrice + (stopDist * 1.3);
-                const tp2 = currentPrice + (stopDist * 2.6);
-
-                signal = {
-                    type: "🟢 LONG (4H Trend + 15M Düzeltme)",
-                    rawEntry: currentPrice,
-                    rawSl: sl,
-                    rawTp1: tp1,
-                    rawTp2: tp2,
-                    sl: formatPrice(sl, currentPrice),
-                    tp1: formatPrice(tp1, currentPrice),
-                    tp2: formatPrice(tp2, currentPrice),
-                    tp1Pct: (((tp1 - currentPrice) / currentPrice) * 100).toFixed(2),
-                    reason: `4H Ana Trend Yükseliş (RSI: ${rsi4h}), 15M Dip Testi (RSI: ${rsi15m})`
-                };
-            }
-
-            const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.35);
-            if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && lsData.shortPct < 65 && !twoConsecutiveGreens) {
-                const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
-                const sl = currentPrice + stopDist;
-                const tp1 = currentPrice - (stopDist * 1.3);
-                const tp2 = currentPrice - (stopDist * 2.6);
-
-                signal = {
-                    type: "🔴 SHORT (4H Trend + 15M Tepki Tepesi)",
-                    rawEntry: currentPrice,
-                    rawSl: sl,
-                    rawTp1: tp1,
-                    rawTp2: tp2,
-                    sl: formatPrice(sl, currentPrice),
-                    tp1: formatPrice(tp1, currentPrice),
-                    tp2: formatPrice(tp2, currentPrice),
-                    tp1Pct: (((currentPrice - tp1) / currentPrice) * 100).toFixed(2),
-                    reason: `4H Ana Trend Düşüş (RSI: ${rsi4h}), 15M Tepe Testi (RSI: ${rsi15m})`
-                };
-            }
-
-            if (!signal && (isPotentialLong || isPotentialShort)) {
-                trendBlockedCount++;
-            }
-
-            const lastAlertTime = alertedCoins.get(symbol) || 0;
-            if (signal && !activeTrades.has(symbol) && (now - lastAlertTime >= 30 * 60 * 1000)) {
-                const candleReportText = build4HCandleReport(klines4h);
-
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                            `🎯 <b>ÇİFT ZAMAN DİLİMLİ PRO SİNYAL (4H + 15M)</b> 🎯\n\n` +
-                            `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
-                            `🎯 <b>Yön:</b> ${signal.type}\n` +
-                            `💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
-                            `🛑 <b>Önerilen Stop (ATR Dinamik):</b> $${signal.sl}\n` +
-                            `⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x Cross/İzole\n\n` +
-                            `🎯 <b>Kademeli Kâr Hedefleri:</b>\n` +
-                            `• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n` +
-                            `• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n` +
-                            `<i>💡 TP1 alınınca Stop noktanızı Giriş Seviyesine taşıyınız.</i>\n\n` +
-                            `${lsData.text}\n\n` +
-                            `${candleReportText}\n\n` +
-                            `📊 <b>Piyasa Teyitleri:</b>\n` +
-                            `• Aktif Seans: ${session}\n` +
-                            `• 15dk RSI: ${rsi15m}\n` +
-                            `• Analiz: ${signal.reason}\n\n` +
-                            `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
-                            `⚠️ <i>"YTD" HEPSİ.</i>`;
-
-                await sendTelegramMessage(msg);
-                alertedCoins.set(symbol, now);
-
-                activeTrades.set(symbol, {
-                    side: signal.type.includes('LONG') ? 'LONG' : 'SHORT',
-                    entry: signal.rawEntry,
-                    sl: signal.rawSl,
-                    tp1: signal.rawTp1,
-                    tp2: signal.rawTp2,
-                    tp1Hit: false,
-                    time: now
-                });
-
-                signalSentInThisCycle = true;
-            }
-        }
-
-        const nowTime = Date.now();
-        if (!signalSentInThisCycle && (nowTime - lastStatusReportTime >= 15 * 60 * 1000)) {
-            const timeNow = getTurkishTimeString();
-            const noSignalMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                                `⏳ <b>[${timeNow}] ÇİFT ZAMAN DİLİMİ RAPORU (4H + 15M)</b>\n\n` +
-                                `🌐 <b>Aktif Seans:</b> ${session}\n` +
-                                `📊 <b>İncelenen:</b> ${scannedCount} Futures Paritesi\n` +
-                                `⚡ <b>BTC Durumu:</b> %${btc.change15m} (Stabil)\n\n` +
-                                `🔍 <b>Neden Sinyal Çıkmadı?</b>\n` +
-                                `• <b>Nötr RSI Bölgesi (35–65):</b> ${rsiNeutralCount} Parite\n` +
-                                `• <b>4H Trend / L-S / Mum Kilidine Takılan:</b> ${trendBlockedCount} Parite\n\n` +
-                                `${getStatsText()}\n\n` +
-                                `🛡️ <i>Disiplinli kural: Piyasa aşırı long/short yığılması içerdiğinde veya son 4H mumlar ters aktığında işlem engellenir.</i>\n\n` +
-                                `⚠️ <i>"YTD" HEPSİ.</i>`;
-
-            await sendTelegramMessage(noSignalMsg);
-            lastStatusReportTime = nowTime;
-        }
-
-    } catch (err) {
-        console.error("Tarama hatası:", err.message);
-    }
-}
-
-// ==========================================
-// 10. ANA ÇALIŞTIRICI DÖNGÜSÜ
-// ==========================================
-async function runLoop() {
-    console.log("🚀 ScalpPro İnteraktif + Otomatik Tarama Motoru Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Artık kanala doğrudan <code>SOL</code>, <code>BTC</code> veya <code>WLD</code> yazdığınızda anlık analizi gönderilecektir.");
-
-    // Telegram dinleme döngüsü (Arka planda kesintisiz)
-    (async () => {
-        while (true) {
-            await pollTelegramUpdates();
-            await sleep(1500);
-        }
-    })();
-
-    // Piyasa tarama döngüsü
-    while (true) {
-        await scanMarket();
-        await sleep(15000);
-    }
-}
-
-runLoop();
+    window.onload = () => {
+      initCharts();
+      loadChartData();
+      initBtcPrice();
+      refreshData();
+      setInterval(refreshData, 30000);
+      setInterval(initBtcPrice, 10000);
+    };
+  </script>
+</body>
+</html>
