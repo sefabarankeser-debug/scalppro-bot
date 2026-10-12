@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro 4H-Trend + 15M-Trigger + Interactive Commands Active\n');
+    res.end('ScalpPro 4H-Trend + 15M-Trigger + Net Direction Strict Filter Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -26,7 +26,7 @@ const CHAT_ID = "-1004412694884";
 // ==========================================
 // 2. HAFIZA & DEĞİŞKENLER
 // ==========================================
-let lastUpdateId = 0; // Telegram mesaj dinleyici için
+let lastUpdateId = 0;
 const alertedCoins = new Map();
 const activeTrades = new Map();
 const processedNewsIds = new Set();
@@ -228,8 +228,10 @@ async function fetchLongShortRatio(symbol) {
     };
 }
 
-function build4HCandleReport(klines4h) {
-    if (!klines4h || klines4h.length < 3) return "";
+function analyze4HCandles(klines4h) {
+    if (!klines4h || klines4h.length < 3) {
+        return { reportText: "", netGain: 0, isBearDominance: false, isBullDominance: false };
+    }
 
     const last3 = klines4h.slice(-3);
     const labels = ["Mum 1 (8-12s)", "Mum 2 (4-8s) ", "Mum 3 (Son 4s)"];
@@ -261,11 +263,21 @@ function build4HCandleReport(klines4h) {
         lines.push(` ${labels[i]}: ${icon} [${bar}] ${sign}${changePct.toFixed(1)}% | Genişlik: %${rangePct.toFixed(1)} (${tag})`);
     }
 
-    let netTrendText = "⚪ Yatay / Kararsız Seyir";
-    if (netGain >= 1.5) netTrendText = "🟢 Güçlü Boğa Baskısı (Bull Dominance)";
-    else if (netGain <= -1.5) netTrendText = "🔴 Güçlü Ayı Baskısı (Bear Dominance)";
+    const isBullDominance = netGain >= 1.5;
+    const isBearDominance = netGain <= -1.5;
 
-    return `🕯️ <b>4H Mum Yapısı (Son 12 Saat & Genişlik):</b>\n<pre>${lines.join('\n')}\n ↳ Net Yön: ${netTrendText}</pre>`;
+    let netTrendText = "⚪ Yatay / Kararsız Seyir";
+    if (isBullDominance) netTrendText = "🟢 Güçlü Boğa Baskısı (Bull Dominance)";
+    else if (isBearDominance) netTrendText = "🔴 Güçlü Ayı Baskısı (Bear Dominance)";
+
+    const reportText = `🕯️ <b>4H Mum Yapısı (Son 12 Saat & Genişlik):</b>\n<pre>${lines.join('\n')}\n ↳ Net Yön: ${netTrendText}</pre>`;
+
+    return {
+        reportText,
+        netGain,
+        isBullDominance,
+        isBearDominance
+    };
 }
 
 // ==========================================
@@ -596,7 +608,6 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     let clean = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (!clean.endsWith('USDT')) clean += 'USDT';
 
-    // 1000PEPE, 1000SHIB gibi türev pariteleri otomatik kontrol et
     let symbol = clean;
     let klines15m = await fetchBybitKlines(symbol, "15", 50);
     if (!klines15m && !symbol.startsWith('1000')) {
@@ -628,10 +639,14 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     else if (currentPrice < ema50_4h && rsi4h <= 50) trendText = "🔴 Düşüş Trendi (Ayı)";
 
     const lsData = await fetchLongShortRatio(symbol);
-    const candleReportText = build4HCandleReport(klines4h);
+    const candleData = analyze4HCandles(klines4h);
 
     let verdict = "⚪ Nötr / Bekle-Gör";
-    if (rsi15m <= 35 && currentPrice > ema50_4h && lsData.longPct < 65) {
+    if (candleData.isBearDominance) {
+        verdict = "🛑 Güçlü Ayı Baskısı Mevcut (Long Girişi Engellendi)";
+    } else if (candleData.isBullDominance) {
+        verdict = "🚀 Güçlü Boğa Baskısı Mevcut (Short Girişi Engellendi)";
+    } else if (rsi15m <= 35 && currentPrice > ema50_4h && lsData.longPct < 65) {
         verdict = "🟢 LONG Fırsat Bölgesi (4H Trend Destekli Dip)";
     } else if (rsi15m >= 65 && currentPrice < ema50_4h && lsData.shortPct < 65) {
         verdict = "🔴 SHORT Fırsat Bölgesi (4H Düşüş Destekli Tepe)";
@@ -649,14 +664,13 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
                       `⚡ <b>15dk RSI:</b> ${rsi15m}\n` +
                       `🎯 <b>Sistem Değerlendirmesi:</b> <b>${verdict}</b>\n\n` +
                       `${lsData.text}\n\n` +
-                      `${candleReportText}\n\n` +
+                      `${candleData.reportText}\n\n` +
                       `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
                       `⚠️ <i>"YTD" HEPSİ.</i>`;
 
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
-// Telegram mesajlarını yakalama motoru
 async function pollTelegramUpdates() {
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=5`;
@@ -670,9 +684,8 @@ async function pollTelegramUpdates() {
                 if (!message || !message.text) continue;
 
                 let txt = message.text.trim();
-                
-                // Örnek komutlar: "SOL", "/analiz SOL", "BTC analiz", "WLD"
                 let targetCoin = null;
+
                 if (txt.startsWith('/analiz')) {
                     const parts = txt.split(' ');
                     if (parts[1]) targetCoin = parts[1];
@@ -688,9 +701,7 @@ async function pollTelegramUpdates() {
                 }
             }
         }
-    } catch (e) {
-        // Sessiz devam et
-    }
+    } catch (e) {}
 }
 
 // ==========================================
@@ -771,6 +782,7 @@ async function scanMarket() {
             const twoConsecutiveReds = (m2_isRed && m3_isRed);
             const twoConsecutiveGreens = (m2_isGreen && m3_isGreen);
 
+            const candleData = analyze4HCandles(klines4h);
             const lsData = await fetchLongShortRatio(symbol);
 
             const atr15 = calculateATR(highs15, lows15, closes15, 14);
@@ -780,8 +792,13 @@ async function scanMarket() {
 
             let signal = null;
 
+            // 🟢 LONG KURALI (Tam Korumalı):
+            // 15M Dip + 4H Bull + Alt Fitil + BTC Güvenli +
+            // L/S <%65 + Arka arkaya 2 kırmızı yok + NET YÖN KESİNLİKLE AYI BASKISI (BEAR DOMINANCE) OLMAMALI!
             const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.35);
-            if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && lsData.longPct < 65 && !twoConsecutiveReds) {
+            if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && 
+                lsData.longPct < 65 && !twoConsecutiveReds && !candleData.isBearDominance) {
+                
                 const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
                 const sl = currentPrice - stopDist;
                 const tp1 = currentPrice + (stopDist * 1.3);
@@ -801,8 +818,13 @@ async function scanMarket() {
                 };
             }
 
+            // 🔴 SHORT KURALI (Tam Korumalı):
+            // 15M Tepe + 4H Bear + Üst Fitil + BTC Güvenli +
+            // L/S <%65 + Arka arkaya 2 yeşil yok + NET YÖN KESİNLİKLE BOĞA BASKISI (BULL DOMINANCE) OLMAMALI!
             const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.35);
-            if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && lsData.shortPct < 65 && !twoConsecutiveGreens) {
+            if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && 
+                lsData.shortPct < 65 && !twoConsecutiveGreens && !candleData.isBullDominance) {
+                
                 const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
                 const sl = currentPrice + stopDist;
                 const tp1 = currentPrice - (stopDist * 1.3);
@@ -828,8 +850,6 @@ async function scanMarket() {
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (now - lastAlertTime >= 30 * 60 * 1000)) {
-                const candleReportText = build4HCandleReport(klines4h);
-
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
                             `🎯 <b>ÇİFT ZAMAN DİLİMLİ PRO SİNYAL (4H + 15M)</b> 🎯\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
@@ -842,7 +862,7 @@ async function scanMarket() {
                             `• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n` +
                             `<i>💡 TP1 alınınca Stop noktanızı Giriş Seviyesine taşıyınız.</i>\n\n` +
                             `${lsData.text}\n\n` +
-                            `${candleReportText}\n\n` +
+                            `${candleData.reportText}\n\n` +
                             `📊 <b>Piyasa Teyitleri:</b>\n` +
                             `• Aktif Seans: ${session}\n` +
                             `• 15dk RSI: ${rsi15m}\n` +
@@ -877,9 +897,9 @@ async function scanMarket() {
                                 `⚡ <b>BTC Durumu:</b> %${btc.change15m} (Stabil)\n\n` +
                                 `🔍 <b>Neden Sinyal Çıkmadı?</b>\n` +
                                 `• <b>Nötr RSI Bölgesi (35–65):</b> ${rsiNeutralCount} Parite\n` +
-                                `• <b>4H Trend / L-S / Mum Kilidine Takılan:</b> ${trendBlockedCount} Parite\n\n` +
+                                `• <b>Net Yön / L-S / Trend Kilidine Takılan:</b> ${trendBlockedCount} Parite\n\n` +
                                 `${getStatsText()}\n\n` +
-                                `🛡️ <i>Disiplinli kural: Piyasa aşırı long/short yığılması içerdiğinde veya son 4H mumlar ters aktığında işlem engellenir.</i>\n\n` +
+                                `🛡️ <i>Disiplinli kural: 12 saatlik toplamda Ayı Baskısı hakimken araya giren tek yeşil mumla asla Long açılmaz.</i>\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
 
             await sendTelegramMessage(noSignalMsg);
@@ -895,10 +915,9 @@ async function scanMarket() {
 // 10. ANA ÇALIŞTIRICI DÖNGÜSÜ
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro İnteraktif + Otomatik Tarama Motoru Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Artık kanala doğrudan <code>SOL</code>, <code>BTC</code> veya <code>WLD</code> yazdığınızda anlık analizi gönderilecektir.");
+    console.log("🚀 ScalpPro Net Yön Korumalı Motor Başlatıldı...");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Net Yön Ayı Baskısı (Bear Dominance) kuralı eklendi. Toplamda düşüş hakimken Long sinyali kesinlikle kilitlendi.");
 
-    // Telegram dinleme döngüsü (Arka planda kesintisiz)
     (async () => {
         while (true) {
             await pollTelegramUpdates();
@@ -906,7 +925,6 @@ async function runLoop() {
         }
     })();
 
-    // Piyasa tarama döngüsü
     while (true) {
         await scanMarket();
         await sleep(15000);
