@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Adaptive AI + On-Demand Universal Engine Active\n');
+    res.end('ScalpPro Adaptive AI + Multi-Exchange Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -134,7 +134,6 @@ let lastNotifiedEvents = {
 
 const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
 
-// Yazım hataları ve yaygın arama toleransı
 const FUZZY_MAP = {
     "DMY": "DYM",
     "PEP": "PEPE",
@@ -231,7 +230,7 @@ function getActiveSessionName() {
 function fetchJSON(url, customHeaders = {}) {
     return new Promise((resolve, reject) => {
         const headers = Object.assign({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, customHeaders);
-        https.get(url, { headers }, (res) => {
+        const req = https.get(url, { headers, timeout: 6000 }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
@@ -241,7 +240,12 @@ function fetchJSON(url, customHeaders = {}) {
                     reject(e);
                 }
             });
-        }).on('error', reject);
+        });
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('Timeout'));
+        });
+        req.on('error', reject);
     });
 }
 
@@ -282,13 +286,13 @@ function sendTelegramMessage(text, replyToId = null) {
 }
 
 // ==========================================
-// 5. LONG/SHORT & 4H MUM RAPORLAYICILARI
+// 5. LONG/SHORT & 4H MUM RAPORLAYICILARI (BYBIT + BINANCE FALLBACK)
 // ==========================================
 async function fetchLongShortRatio(symbol) {
     try {
         const url = `https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=${symbol}&period=4h&limit=1`;
         const json = await fetchJSON(url);
-        if (json.retCode === 0 && json.result && json.result.list && json.result.list.length > 0) {
+        if (json.retCode === 0 && json.result?.list?.length > 0) {
             const item = json.result.list[0];
             const buyRatio = parseFloat(item.buyRatio);
             const sellRatio = parseFloat(item.sellRatio);
@@ -311,6 +315,27 @@ async function fetchLongShortRatio(symbol) {
             };
         }
     } catch (e) {}
+
+    // Binance Fallback
+    try {
+        const binanceUrl = `https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=4h&limit=1`;
+        const bData = await fetchJSON(binanceUrl);
+        if (Array.isArray(bData) && bData.length > 0) {
+            const longPct = Math.round(parseFloat(bData[0].longAccount) * 100);
+            const shortPct = Math.round(parseFloat(bData[0].shortAccount) * 100);
+            const totalBlocks = 20;
+            const longBlocks = Math.round((longPct / 100) * totalBlocks);
+            const shortBlocks = totalBlocks - longBlocks;
+            const bar = '█'.repeat(Math.max(0, longBlocks)) + '░'.repeat(Math.max(0, shortBlocks));
+
+            return {
+                longPct,
+                shortPct,
+                text: `⚖️ <b>Long / Short Dağılımı (Binance):</b>\n[${bar}]\n%${longPct} Long | %${shortPct} Short`
+            };
+        }
+    } catch (e) {}
+
     return {
         longPct: 50,
         shortPct: 50,
@@ -430,19 +455,33 @@ function calculateATR(highs, lows, closes, period = 14) {
     return recentTrs.reduce((a, b) => a + b, 0) / period;
 }
 
-async function fetchBybitKlines(symbol, interval, limit) {
+// Hem Bybit hem Binance üzerinden mum çekme
+async function fetchUniversalKlines(symbol, interval, limit) {
+    // 1. Bybit Denemesi
     try {
-        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`;
-        const json = await fetchJSON(url, { 'User-Agent': 'ScalpProMultiTF/3.0' });
-        if (json.retCode !== 0 || !json.result || !json.result.list || json.result.list.length < 20) return null;
-        return json.result.list.slice().reverse();
-    } catch (e) {
-        return null;
-    }
+        const bybitInterval = interval === "15m" ? "15" : (interval === "4h" ? "240" : interval);
+        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${bybitInterval}&limit=${limit}`;
+        const json = await fetchJSON(url);
+        if (json.retCode === 0 && json.result?.list?.length >= 20) {
+            return json.result.list.slice().reverse();
+        }
+    } catch (e) {}
+
+    // 2. Binance Futures Denemesi
+    try {
+        const binanceInterval = interval === "15" ? "15m" : (interval === "240" ? "4h" : interval);
+        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${binanceInterval}&limit=${limit}`;
+        const data = await fetchJSON(url);
+        if (Array.isArray(data) && data.length >= 20) {
+            return data.map(k => [k[0], k[1], k[2], k[3], k[4], k[5]]);
+        }
+    } catch (e) {}
+
+    return null;
 }
 
 async function checkBtcCondition() {
-    const list = await fetchBybitKlines("BTCUSDT", "15", 30);
+    const list = await fetchUniversalKlines("BTCUSDT", "15", 30);
     if (!list || list.length < 3) return { safe: true, btcTrend: "NEUTRAL", change15m: "0.00" };
 
     const currentPrice = parseFloat(list[list.length - 1][4]);
@@ -709,7 +748,6 @@ async function checkSessionAlerts() {
 async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     let clean = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
     
-    // Fuzzy düzeltme (dmy -> DYM vb.)
     if (FUZZY_MAP[clean]) {
         clean = FUZZY_MAP[clean];
     }
@@ -717,19 +755,19 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     if (!clean.endsWith('USDT')) clean += 'USDT';
 
     let symbol = clean;
-    let klines15m = await fetchBybitKlines(symbol, "15", 50);
+    let klines15m = await fetchUniversalKlines(symbol, "15", 50);
     if (!klines15m && !symbol.startsWith('1000')) {
         symbol = '1000' + clean;
-        klines15m = await fetchBybitKlines(symbol, "15", 50);
+        klines15m = await fetchUniversalKlines(symbol, "15", 50);
     }
 
-    if (!klines15m || klines15m.length < 30) {
-        await sendTelegramMessage(`⚠️ <b>#${clean}</b> için Bybit Futures verisi bulunamadı. Lütfen sembolü kontrol ediniz.`, replyToId);
+    if (!klines15m || klines15m.length < 25) {
+        await sendTelegramMessage(`⚠️ <b>#${clean}</b> için vadeli işlem verisi (Bybit / Binance) bulunamadı.`, replyToId);
         return;
     }
 
-    const klines4h = await fetchBybitKlines(symbol, "240", 60);
-    if (!klines4h || klines4h.length < 25) {
+    const klines4h = await fetchUniversalKlines(symbol, "240", 50);
+    if (!klines4h || klines4h.length < 20) {
         await sendTelegramMessage(`⚠️ <b>#${clean}</b> için 4 saatlik grafik verisi yetersiz.`, replyToId);
         return;
     }
@@ -786,43 +824,50 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
-// Hızlı Dip/Tepe Tarama Komutu
+// Hızlı ve Zaman Aşımsız Dip/Tepe Tarama
 async function scanExtremes(type, replyToId = null) {
-    await sendTelegramMessage(`🔍 <b>${type === 'DIP' ? 'Dip Bölgesindeki' : 'Aşırı Şişmiş'} Pariteler Taranıyor...</b> Lütfen bekleyiniz.`, replyToId);
-    const results = [];
+    try {
+        const checkList = TARGET_COINS.slice(0, 35);
+        const promises = checkList.map(async (sym) => {
+            try {
+                const k15 = await fetchUniversalKlines(sym, "15", 30);
+                if (!k15 || k15.length < 20) return null;
+                const closes = k15.map(k => parseFloat(k[4]));
+                const rsi = calculateRSI(closes, 14);
+                const cur = closes[closes.length - 1];
+                return { sym: sym.replace('USDT', ''), rsi, price: cur };
+            } catch (e) {
+                return null;
+            }
+        });
 
-    for (const sym of TARGET_COINS.slice(0, 30)) {
-        const k15 = await fetchBybitKlines(sym, "15", 30);
-        await sleep(50);
-        if (!k15 || k15.length < 20) continue;
+        const all = await Promise.all(promises);
+        const valid = all.filter(Boolean);
 
-        const closes = k15.map(k => parseFloat(k[4]));
-        const rsi = calculateRSI(closes, 14);
-        const cur = closes[closes.length - 1];
-
-        if (type === 'DIP' && rsi <= 35) {
-            results.push({ sym: sym.replace('USDT', ''), rsi, price: cur });
-        } else if (type === 'TEPE' && rsi >= 65) {
-            results.push({ sym: sym.replace('USDT', ''), rsi, price: cur });
+        let filtered = [];
+        if (type === 'DIP') {
+            filtered = valid.filter(x => x.rsi <= 38).sort((a, b) => a.rsi - b.rsi);
+        } else {
+            filtered = valid.filter(x => x.rsi >= 62).sort((a, b) => b.rsi - a.rsi);
         }
+
+        if (filtered.length === 0) {
+            await sendTelegramMessage(`ℹ️ Şu an ${type === 'DIP' ? 'aşırı dipte (RSI <= 38)' : 'aşırı tepede (RSI >= 62)'} parite bulunamadı. Piyasa nötr bölgede.`, replyToId);
+            return;
+        }
+
+        let text = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+                   `🎯 <b>${type === 'DIP' ? '🟢 EN DİPTEKİ PARİTELER (Dönüş Yakın)' : '🔴 EN TEPEDEKİ PARİTELER (Düzeltme Yakın)'}</b>\n\n`;
+
+        for (const r of filtered.slice(0, 6)) {
+            text += `• <b>#${r.sym}:</b> 15M RSI <b>${r.rsi}</b> | Fiyat: $${formatPrice(r.price, r.price)}\n`;
+        }
+
+        text += `\n💡 <i>İncelemek istediğin coinin ismini yazarak detaylı raporunu alabilirsin.</i>`;
+        await sendTelegramMessage(text, replyToId);
+    } catch (err) {
+        console.error("scanExtremes hatasi:", err.message);
     }
-
-    results.sort((a, b) => type === 'DIP' ? a.rsi - b.rsi : b.rsi - a.rsi);
-
-    if (results.length === 0) {
-        await sendTelegramMessage(`ℹ️ Şu an ${type === 'DIP' ? 'aşırı dipte (RSI <= 35)' : 'aşırı tepede (RSI >= 65)'} parite bulunamadı. Piyasa nötr bölgede.`);
-        return;
-    }
-
-    let text = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-               `🎯 <b>${type === 'DIP' ? '🟢 EN DİPTEKİ PARİTELER (RSI <= 35)' : '🔴 EN TEPEDEKİ PARİTELER (RSI >= 65)'}</b>\n\n`;
-
-    for (const r of results.slice(0, 5)) {
-        text += `• <b>#${r.sym}:</b> RSI ${r.rsi} | Fiyat: $${formatPrice(r.price, r.price)}\n`;
-    }
-
-    text += `\n💡 <i>Detaylı incelemek istediğin coin için ismini yazman yeterlidir (Örn: ${results[0].sym}).</i>`;
-    await sendTelegramMessage(text);
 }
 
 async function pollTelegramUpdates() {
@@ -879,7 +924,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const session = getActiveSessionName();
-        console.log(`55 Parite (Adaptif Hibrit Profil + Sıkı Filtre) taranıyor [${session}]...`, getTurkishTimeString());
+        console.log(`55 Parite taranıyor [${session}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -899,8 +944,8 @@ async function scanMarket() {
                 continue;
             }
 
-            const klines15m = await fetchBybitKlines(symbol, "15", 50);
-            await sleep(80);
+            const klines15m = await fetchUniversalKlines(symbol, "15", 50);
+            await sleep(70);
 
             if (!klines15m || klines15m.length < 35) continue;
             scannedCount++;
@@ -927,8 +972,8 @@ async function scanMarket() {
                 continue;
             }
 
-            const klines4h = await fetchBybitKlines(symbol, "240", 60);
-            await sleep(80);
+            const klines4h = await fetchUniversalKlines(symbol, "240", 60);
+            await sleep(70);
 
             if (!klines4h || klines4h.length < 25) continue;
 
@@ -1087,8 +1132,8 @@ async function scanMarket() {
 // 11. ANA ÇALIŞTIRICI DÖNGÜSÜ
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Adaptif Hibrit Motor Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Yazım hatası toleransı, evrensel coin analizi ve <code>dip</code>/<code>tepe</code> tarama komutları aktif!");
+    console.log("🚀 ScalpPro Multi-Exchange Hibrit Motor Başlatıldı...");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Binance + Bybit hibrit veri köprüsü aktif. <code>Dip</code>, <code>Tepe</code> ve serbest coin aramaları hızlandırıldı.");
 
     (async () => {
         while (true) {
