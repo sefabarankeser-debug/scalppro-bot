@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro 4H-Trend + 15M-Trigger + Net Direction Strict Filter Active\n');
+    res.end('ScalpPro Adaptive AI + Multi-TF Bot Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda aktif.`);
 });
@@ -24,7 +24,97 @@ const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = "-1004412694884";
 
 // ==========================================
-// 2. HAFIZA & DEĞİŞKENLER
+// 2. ADAPTİF PROFİL VE COİN KATEGORİLERİ
+// ==========================================
+const BASE_PROFILES = {
+    MAJOR: {
+        category: "💎 Majör / Trend Sadık",
+        rsiLong: 38,
+        rsiShort: 62,
+        atrMultiplier: 1.4,
+        maxLsRatio: 65
+    },
+    MEME: {
+        category: "🐸 Meme / Ekstrem Volatilite",
+        rsiLong: 28,
+        rsiShort: 72,
+        atrMultiplier: 2.2,
+        maxLsRatio: 60
+    },
+    VOLATILE_ALT: {
+        category: "⚡ Sığ Tahta / Yüksek Oynaklık",
+        rsiLong: 32,
+        rsiShort: 68,
+        atrMultiplier: 2.0,
+        maxLsRatio: 58
+    }
+};
+
+const COIN_ASSIGNMENTS = {
+    "SOLUSDT": "MAJOR", "AVAXUSDT": "MAJOR", "NEARUSDT": "MAJOR", "LINKUSDT": "MAJOR",
+    "UNIUSDT": "MAJOR", "LTCUSDT": "MAJOR", "BCHUSDT": "MAJOR", "ETCUSDT": "MAJOR",
+    "ATOMUSDT": "MAJOR", "FILUSDT": "MAJOR", "ALGOUSDT": "MAJOR",
+
+    "DOGEUSDT": "MEME", "1000PEPEUSDT": "MEME", "WIFUSDT": "MEME", "1000SHIBUSDT": "MEME",
+    "1000FLOKIUSDT": "MEME", "1000BONKUSDT": "MEME", "NEIROUSDT": "MEME", "NOTUSDT": "MEME",
+
+    "DYMUSDT": "VOLATILE_ALT", "STRKUSDT": "VOLATILE_ALT", "WLDUSDT": "VOLATILE_ALT",
+    "SUIUSDT": "VOLATILE_ALT", "APTUSDT": "VOLATILE_ALT", "TAOUSDT": "VOLATILE_ALT",
+    "FETUSDT": "VOLATILE_ALT", "SEIUSDT": "VOLATILE_ALT", "ARKMUSDT": "VOLATILE_ALT",
+    "RENDERUSDT": "VOLATILE_ALT", "INJUSDT": "VOLATILE_ALT", "ARBUSDT": "VOLATILE_ALT",
+    "OPUSDT": "VOLATILE_ALT", "TIAUSDT": "VOLATILE_ALT", "PENDLEUSDT": "VOLATILE_ALT",
+    "GALAUSDT": "VOLATILE_ALT", "STXUSDT": "VOLATILE_ALT", "ORDIUSDT": "VOLATILE_ALT",
+    "RUNEUSDT": "VOLATILE_ALT", "AAVEUSDT": "VOLATILE_ALT", "LDOUSDT": "VOLATILE_ALT",
+    "JUPUSDT": "VOLATILE_ALT", "ENAUSDT": "VOLATILE_ALT", "ARUSDT": "VOLATILE_ALT",
+    "CFXUSDT": "VOLATILE_ALT", "JTOUSDT": "VOLATILE_ALT", "CRVUSDT": "VOLATILE_ALT",
+    "DYDXUSDT": "VOLATILE_ALT", "GMXUSDT": "VOLATILE_ALT", "FTMUSDT": "VOLATILE_ALT",
+    "SANDUSDT": "VOLATILE_ALT", "MANAUSDT": "VOLATILE_ALT", "THETAUSDT": "VOLATILE_ALT",
+    "ZROUSDT": "VOLATILE_ALT", "PYTHUSDT": "VOLATILE_ALT", "WUSDT": "VOLATILE_ALT"
+};
+
+const dynamicCoinMemory = new Map();
+
+function getCoinProfile(symbol) {
+    if (!dynamicCoinMemory.has(symbol)) {
+        const group = COIN_ASSIGNMENTS[symbol] || "VOLATILE_ALT";
+        const base = BASE_PROFILES[group];
+        dynamicCoinMemory.set(symbol, {
+            group,
+            category: base.category,
+            rsiLong: base.rsiLong,
+            rsiShort: base.rsiShort,
+            atrMultiplier: base.atrMultiplier,
+            maxLsRatio: base.maxLsRatio,
+            consecutiveStops: 0,
+            totalTps: 0,
+            totalStops: 0,
+            quarantineUntil: 0
+        });
+    }
+    return dynamicCoinMemory.get(symbol);
+}
+
+function handleTradeResult(symbol, resultType) {
+    const prof = getCoinProfile(symbol);
+    if (resultType === 'STOP') {
+        prof.totalStops++;
+        prof.consecutiveStops++;
+        prof.rsiLong = Math.max(20, prof.rsiLong - 2);
+        prof.rsiShort = Math.min(80, prof.rsiShort + 2);
+        prof.atrMultiplier = parseFloat((prof.atrMultiplier + 0.2).toFixed(1));
+
+        if (prof.consecutiveStops >= 3) {
+            prof.quarantineUntil = Date.now() + (24 * 60 * 60 * 1000);
+            sendTelegramMessage(`🛡️ <b>${symbol} 24 Saat Karantinaya Alındı!</b>\nPeş peşe 3 stop nedeniyle parametreler optimize edilene kadar sinyaller durduruldu.`);
+        }
+    } else if (resultType === 'TP') {
+        prof.totalTps++;
+        prof.consecutiveStops = 0;
+    }
+}
+
+// ==========================================
+// 3. HAFIZA & DEĞİŞKENLER
 // ==========================================
 let lastUpdateId = 0;
 const alertedCoins = new Map();
@@ -42,19 +132,7 @@ let lastNotifiedEvents = {
     closeNY: false
 };
 
-const TARGET_COINS = [
-    "SOLUSDT", "DOGEUSDT", "SUIUSDT", "1000PEPEUSDT", "AVAXUSDT",
-    "NEARUSDT", "WIFUSDT", "APTUSDT", "1000SHIBUSDT", "TAOUSDT",
-    "FETUSDT", "SEIUSDT", "ARKMUSDT", "RENDERUSDT", "INJUSDT",
-    "ARBUSDT", "OPUSDT", "TIAUSDT", "NOTUSDT", "1000FLOKIUSDT",
-    "1000BONKUSDT", "BCHUSDT", "PENDLEUSDT", "GALAUSDT", "STXUSDT",
-    "ORDIUSDT", "RUNEUSDT", "AAVEUSDT", "LDOUSDT", "WLDUSDT",
-    "JUPUSDT", "ENAUSDT", "ARUSDT", "CFXUSDT", "JTOUSDT",
-    "CRVUSDT", "NEIROUSDT", "DYDXUSDT", "GMXUSDT", "UNIUSDT",
-    "LINKUSDT", "FTMUSDT", "SANDUSDT", "MANAUSDT", "THETAUSDT",
-    "LTCUSDT", "ATOMUSDT", "FILUSDT", "ETCUSDT", "ALGOUSDT",
-    "DYMUSDT", "ZROUSDT", "STRKUSDT", "PYTHUSDT", "WUSDT"
-];
+const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
 
 const COIN_ALIASES = {
     "CFX": ["conflux", "cfx"], "DYM": ["dymension", "dym"], "NOT": ["notcoin", "not"],
@@ -134,7 +212,7 @@ function getActiveSessionName() {
 }
 
 // ==========================================
-// 3. API & TELEGRAM İLETİŞİM MOTORLARI
+// 4. API & TELEGRAM İLETİŞİM MOTORLARI
 // ==========================================
 function fetchJSON(url, customHeaders = {}) {
     return new Promise((resolve, reject) => {
@@ -192,7 +270,7 @@ function sendTelegramMessage(text, replyToId = null) {
 }
 
 // ==========================================
-// 4. LONG/SHORT & 4H MUM RAPORLAYICILARI
+// 5. LONG/SHORT & 4H MUM RAPORLAYICILARI
 // ==========================================
 async function fetchLongShortRatio(symbol) {
     try {
@@ -281,7 +359,7 @@ function analyze4HCandles(klines4h) {
 }
 
 // ==========================================
-// 5. TEKNİK İNDİKATÖR FONKSİYONLARI
+// 6. TEKNİK İNDİKATÖR FONKSİYONLARI
 // ==========================================
 function calculateRSI(closes, period = 14) {
     if (!Array.isArray(closes) || closes.length < period + 1) return 50;
@@ -372,7 +450,7 @@ async function checkBtcCondition() {
 }
 
 // ==========================================
-// 6. CANLI İŞLEM TAKİBİ
+// 7. CANLI İŞLEM TAKİBİ
 // ==========================================
 async function checkActiveTrades(symbol, currentPrice) {
     const trade = activeTrades.get(symbol);
@@ -386,6 +464,7 @@ async function checkActiveTrades(symbol, currentPrice) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
             tradeHistory.push({ type: 'TP', time: Date.now() });
+            handleTradeResult(symbol, 'TP');
 
             const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
             const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
@@ -401,6 +480,7 @@ async function checkActiveTrades(symbol, currentPrice) {
 
         if (currentPrice >= trade.tp2) {
             tradeHistory.push({ type: 'TP', time: Date.now() });
+            handleTradeResult(symbol, 'TP');
             const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
             const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
                            `🎯 <b>Yön:</b> 🟢 LONG (4H Trend Destekli)\n` +
@@ -417,12 +497,13 @@ async function checkActiveTrades(symbol, currentPrice) {
 
         if (currentPrice <= trade.sl) {
             tradeHistory.push({ type: 'STOP', time: Date.now() });
+            handleTradeResult(symbol, 'STOP');
             const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
             const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
                             `🎯 <b>Yön:</b> 🟢 LONG (4H Trend Destekli)\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti. Bu coin için adaptif parametreler sıkılaştırıldı.</i>\n\n` +
                             `${getStatsText()}\n` +
                             `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(stopMsg);
@@ -436,6 +517,7 @@ async function checkActiveTrades(symbol, currentPrice) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
             tradeHistory.push({ type: 'TP', time: Date.now() });
+            handleTradeResult(symbol, 'TP');
 
             const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
             const tp1Msg = `✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n` +
@@ -451,6 +533,7 @@ async function checkActiveTrades(symbol, currentPrice) {
 
         if (currentPrice <= trade.tp2) {
             tradeHistory.push({ type: 'TP', time: Date.now() });
+            handleTradeResult(symbol, 'TP');
             const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
             const tp2Msg = `✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n` +
                            `🎯 <b>Yön:</b> 🔴 SHORT (4H Trend Destekli)\n` +
@@ -467,12 +550,13 @@ async function checkActiveTrades(symbol, currentPrice) {
 
         if (currentPrice >= trade.sl) {
             tradeHistory.push({ type: 'STOP', time: Date.now() });
+            handleTradeResult(symbol, 'STOP');
             const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
             const stopMsg = `❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n` +
                             `🎯 <b>Yön:</b> 🔴 SHORT (4H Trend Destekli)\n` +
                             `💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n` +
                             `🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n` +
-                            `⚠️ <i>İşlem stop seviyesine temas etti, pozisyon kapatıldı.</i>\n\n` +
+                            `⚠️ <i>İşlem stop seviyesine temas etti. Bu coin için adaptif parametreler sıkılaştırıldı.</i>\n\n` +
                             `${getStatsText()}\n` +
                             `⏱ <b>${nowTime} (TSİ)</b>`;
             await sendTelegramMessage(stopMsg);
@@ -487,7 +571,7 @@ async function checkActiveTrades(symbol, currentPrice) {
 }
 
 // ==========================================
-// 7. HABER & SEANS RADARI
+// 8. HABER & SEANS RADARI
 // ==========================================
 async function checkBreakingNews() {
     try {
@@ -602,7 +686,7 @@ async function checkSessionAlerts() {
 }
 
 // ==========================================
-// 8. ÖZEL İSTEK (ON-DEMAND) ANALİZ MOTORU
+// 9. ÖZEL İSTEK (ON-DEMAND) ANALİZ MOTORU
 // ==========================================
 async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     let clean = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -640,19 +724,22 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
 
     const lsData = await fetchLongShortRatio(symbol);
     const candleData = analyze4HCandles(klines4h);
+    const prof = getCoinProfile(symbol);
 
     let verdict = "⚪ Nötr / Bekle-Gör";
-    if (candleData.isBearDominance) {
+    if (prof.quarantineUntil > Date.now()) {
+        verdict = "🛡️ Coin Karantinada (Yüksek Yanılma Nedeniyle İzlemede)";
+    } else if (candleData.isBearDominance) {
         verdict = "🛑 Güçlü Ayı Baskısı Mevcut (Long Girişi Engellendi)";
     } else if (candleData.isBullDominance) {
         verdict = "🚀 Güçlü Boğa Baskısı Mevcut (Short Girişi Engellendi)";
-    } else if (rsi15m <= 35 && currentPrice > ema50_4h && lsData.longPct < 65) {
-        verdict = "🟢 LONG Fırsat Bölgesi (4H Trend Destekli Dip)";
-    } else if (rsi15m >= 65 && currentPrice < ema50_4h && lsData.shortPct < 65) {
-        verdict = "🔴 SHORT Fırsat Bölgesi (4H Düşüş Destekli Tepe)";
-    } else if (lsData.longPct >= 65) {
+    } else if (rsi15m <= prof.rsiLong && currentPrice > ema50_4h && lsData.longPct < prof.maxLsRatio) {
+        verdict = `🟢 LONG Fırsat Bölgesi (Özel Eşik: ${prof.rsiLong})`;
+    } else if (rsi15m >= prof.rsiShort && currentPrice < ema50_4h && lsData.shortPct < prof.maxLsRatio) {
+        verdict = `🔴 SHORT Fırsat Bölgesi (Özel Eşik: ${prof.rsiShort})`;
+    } else if (lsData.longPct >= prof.maxLsRatio) {
         verdict = "⚠️ Aşırı Long Yığılması (Likidasyon / Düşüş Riski)";
-    } else if (lsData.shortPct >= 65) {
+    } else if (lsData.shortPct >= prof.maxLsRatio) {
         verdict = "⚠️ Aşırı Short Yığılması (Squeeze / Pump Riski)";
     }
 
@@ -661,8 +748,12 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
                       `🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n` +
                       `💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
                       `🧭 <b>4H Ana Trend:</b> ${trendText} (RSI: ${rsi4h})\n` +
-                      `⚡ <b>15dk RSI:</b> ${rsi15m}\n` +
+                      `⚡ <b>15dk RSI:</b> ${rsi15m} (Dip Hedefi: ${prof.rsiLong})\n` +
                       `🎯 <b>Sistem Değerlendirmesi:</b> <b>${verdict}</b>\n\n` +
+                      `⚙️ <b>Coin Özel Parametresi:</b>\n` +
+                      `• Profil: ${prof.category}\n` +
+                      `• Optimize ATR: ${prof.atrMultiplier}x | Maks L/S: %${prof.maxLsRatio}\n` +
+                      `• Geçmiş: ${prof.totalTps} TP / ${prof.totalStops} Stop\n\n` +
                       `${lsData.text}\n\n` +
                       `${candleData.reportText}\n\n` +
                       `🔗 <a href="${binanceUrl}">Binance Futures'ta Aç</a>\n\n` +
@@ -705,7 +796,7 @@ async function pollTelegramUpdates() {
 }
 
 // ==========================================
-// 9. MULTI-TIMEFRAME (4H + 15M) TARAMA MOTORU
+// 10. MULTI-TIMEFRAME (4H + 15M) TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -713,7 +804,7 @@ async function scanMarket() {
         await checkBreakingNews();
 
         const session = getActiveSessionName();
-        console.log(`55 Parite (4H Trend + 15M Tetik + Sıkı Filtre) taranıyor [${session}]...`, getTurkishTimeString());
+        console.log(`55 Parite (Adaptif Hibrit Profil + Sıkı Filtre) taranıyor [${session}]...`, getTurkishTimeString());
 
         const btc = await checkBtcCondition();
         if (!btc.safe) {
@@ -727,6 +818,13 @@ async function scanMarket() {
         let rsiNeutralCount = 0;
 
         for (const symbol of TARGET_COINS) {
+            const prof = getCoinProfile(symbol);
+
+            // Karantinadaki coini es geç
+            if (prof.quarantineUntil > Date.now()) {
+                continue;
+            }
+
             const klines15m = await fetchBybitKlines(symbol, "15", 50);
             await sleep(80);
 
@@ -747,8 +845,9 @@ async function scanMarket() {
 
             const rsi15m = calculateRSI(closes15, 14);
 
-            const isPotentialLong = (rsi15m <= 35);
-            const isPotentialShort = (rsi15m >= 65);
+            // Her coine özel dinamik RSI eşiği
+            const isPotentialLong = (rsi15m <= prof.rsiLong);
+            const isPotentialShort = (rsi15m >= prof.rsiShort);
 
             if (!isPotentialLong && !isPotentialShort) {
                 rsiNeutralCount++;
@@ -792,14 +891,12 @@ async function scanMarket() {
 
             let signal = null;
 
-            // 🟢 LONG KURALI (Tam Korumalı):
-            // 15M Dip + 4H Bull + Alt Fitil + BTC Güvenli +
-            // L/S <%65 + Arka arkaya 2 kırmızı yok + NET YÖN KESİNLİKLE AYI BASKISI (BEAR DOMINANCE) OLMAMALI!
+            // 🟢 LONG KURALI (Her Coine Özel Eşikli & Net Yön Korumalı)
             const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.35);
             if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && 
-                lsData.longPct < 65 && !twoConsecutiveReds && !candleData.isBearDominance) {
+                lsData.longPct < prof.maxLsRatio && !twoConsecutiveReds && !candleData.isBearDominance) {
                 
-                const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
+                const stopDist = atr15 ? Math.max(atr15 * prof.atrMultiplier, currentPrice * 0.012) : currentPrice * 0.015;
                 const sl = currentPrice - stopDist;
                 const tp1 = currentPrice + (stopDist * 1.3);
                 const tp2 = currentPrice + (stopDist * 2.6);
@@ -814,24 +911,22 @@ async function scanMarket() {
                     tp1: formatPrice(tp1, currentPrice),
                     tp2: formatPrice(tp2, currentPrice),
                     tp1Pct: (((tp1 - currentPrice) / currentPrice) * 100).toFixed(2),
-                    reason: `4H Ana Trend Yükseliş (RSI: ${rsi4h}), 15M Dip Testi (RSI: ${rsi15m})`
+                    reason: `4H Ana Trend Yükseliş (RSI: ${rsi4h}), 15M Eşik (${rsi15m} <= ${prof.rsiLong})`
                 };
             }
 
-            // 🔴 SHORT KURALI (Tam Korumalı):
-            // 15M Tepe + 4H Bear + Üst Fitil + BTC Güvenli +
-            // L/S <%65 + Arka arkaya 2 yeşil yok + NET YÖN KESİNLİKLE BOĞA BASKISI (BULL DOMINANCE) OLMAMALI!
+            // 🔴 SHORT KURALI (Her Coine Özel Eşikli & Net Yön Korumalı)
             const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.35);
             if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && 
-                lsData.shortPct < 65 && !twoConsecutiveGreens && !candleData.isBullDominance) {
+                lsData.shortPct < prof.maxLsRatio && !twoConsecutiveGreens && !candleData.isBullDominance) {
                 
-                const stopDist = atr15 ? Math.max(atr15 * 1.5, currentPrice * 0.012) : currentPrice * 0.015;
+                const stopDist = atr15 ? Math.max(atr15 * prof.atrMultiplier, currentPrice * 0.012) : currentPrice * 0.015;
                 const sl = currentPrice + stopDist;
                 const tp1 = currentPrice - (stopDist * 1.3);
                 const tp2 = currentPrice - (stopDist * 2.6);
 
                 signal = {
-                    type: "🔴 SHORT (4H Trend + 15M Tepki Tepesi)",
+                    type: "🔴 SHORT (4H Trend + 15M Tepki)",
                     rawEntry: currentPrice,
                     rawSl: sl,
                     rawTp1: tp1,
@@ -840,7 +935,7 @@ async function scanMarket() {
                     tp1: formatPrice(tp1, currentPrice),
                     tp2: formatPrice(tp2, currentPrice),
                     tp1Pct: (((currentPrice - tp1) / currentPrice) * 100).toFixed(2),
-                    reason: `4H Ana Trend Düşüş (RSI: ${rsi4h}), 15M Tepe Testi (RSI: ${rsi15m})`
+                    reason: `4H Ana Trend Düşüş (RSI: ${rsi4h}), 15M Eşik (${rsi15m} >= ${prof.rsiShort})`
                 };
             }
 
@@ -851,16 +946,20 @@ async function scanMarket() {
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (now - lastAlertTime >= 30 * 60 * 1000)) {
                 const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
-                            `🎯 <b>ÇİFT ZAMAN DİLİMLİ PRO SİNYAL (4H + 15M)</b> 🎯\n\n` +
+                            `🎯 <b>ADAPTİF PRO SİNYAL (4H + 15M)</b> 🎯\n\n` +
                             `🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n` +
                             `🎯 <b>Yön:</b> ${signal.type}\n` +
                             `💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n` +
-                            `🛑 <b>Önerilen Stop (ATR Dinamik):</b> $${signal.sl}\n` +
+                            `🛑 <b>Önerilen Stop (Özel ATR):</b> $${signal.sl}\n` +
                             `⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x Cross/İzole\n\n` +
                             `🎯 <b>Kademeli Kâr Hedefleri:</b>\n` +
                             `• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n` +
                             `• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n` +
                             `<i>💡 TP1 alınınca Stop noktanızı Giriş Seviyesine taşıyınız.</i>\n\n` +
+                            `⚙️ <b>Coin Özel Parametresi:</b>\n` +
+                            `• Profil: ${prof.category}\n` +
+                            `• Optimize Eşik: ${signal.type.includes('LONG') ? prof.rsiLong : prof.rsiShort} RSI | ATR Çarpanı: ${prof.atrMultiplier}x\n` +
+                            `• Canlı Başarı: ${prof.totalTps} TP / ${prof.totalStops} Stop\n\n` +
                             `${lsData.text}\n\n` +
                             `${candleData.reportText}\n\n` +
                             `📊 <b>Piyasa Teyitleri:</b>\n` +
@@ -896,10 +995,10 @@ async function scanMarket() {
                                 `📊 <b>İncelenen:</b> ${scannedCount} Futures Paritesi\n` +
                                 `⚡ <b>BTC Durumu:</b> %${btc.change15m} (Stabil)\n\n` +
                                 `🔍 <b>Neden Sinyal Çıkmadı?</b>\n` +
-                                `• <b>Nötr RSI Bölgesi (35–65):</b> ${rsiNeutralCount} Parite\n` +
-                                `• <b>Net Yön / L-S / Trend Kilidine Takılan:</b> ${trendBlockedCount} Parite\n\n` +
+                                `• <b>Nötr RSI Bölgesi:</b> ${rsiNeutralCount} Parite\n` +
+                                `• <b>Net Yön / L-S / Filtre Kilidine Takılan:</b> ${trendBlockedCount} Parite\n\n` +
                                 `${getStatsText()}\n\n` +
-                                `🛡️ <i>Disiplinli kural: 12 saatlik toplamda Ayı Baskısı hakimken araya giren tek yeşil mumla asla Long açılmaz.</i>\n\n` +
+                                `🛡️ <i>Disiplinli kural: Her parite kendi dinamik risk profiliyle taranır; genel ayı baskısında sahte yeşillere işlem açılmaz.</i>\n\n` +
                                 `⚠️ <i>"YTD" HEPSİ.</i>`;
 
             await sendTelegramMessage(noSignalMsg);
@@ -912,11 +1011,11 @@ async function scanMarket() {
 }
 
 // ==========================================
-// 10. ANA ÇALIŞTIRICI DÖNGÜSÜ
+// 11. ANA ÇALIŞTIRICI DÖNGÜSÜ
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Net Yön Korumalı Motor Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Net Yön Ayı Baskısı (Bear Dominance) kuralı eklendi. Toplamda düşüş hakimken Long sinyali kesinlikle kilitlendi.");
+    console.log("🚀 ScalpPro Adaptif Hibrit Motor Başlatıldı...");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Coin bazlı adaptif profilleme devrede. Her parite kendi dinamik RSI, ATR ve L/S limitlerine göre işlem arıyor.");
 
     (async () => {
         while (true) {
