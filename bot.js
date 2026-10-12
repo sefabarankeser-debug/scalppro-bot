@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Adaptive AI + Full Original Template Active\n');
+    res.end('ScalpPro Adaptive AI + On-Demand Universal Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -133,6 +133,20 @@ let lastNotifiedEvents = {
 };
 
 const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
+
+// Yazım hataları ve yaygın arama toleransı
+const FUZZY_MAP = {
+    "DMY": "DYM",
+    "PEP": "PEPE",
+    "SHIBA": "SHIB",
+    "DOG": "DOGE",
+    "FLOK": "FLOKI",
+    "BON": "BONK",
+    "LNK": "LINK",
+    "AVX": "AVAX",
+    "NOTC": "NOT",
+    "STR": "STRK"
+};
 
 const COIN_ALIASES = {
     "CFX": ["conflux", "cfx"], "DYM": ["dymension", "dym"], "NOT": ["notcoin", "not"],
@@ -690,10 +704,16 @@ async function checkSessionAlerts() {
 }
 
 // ==========================================
-// 9. ÖZEL İSTEK (ON-DEMAND) ANALİZ MOTORU
+// 9. ÖZEL İSTEK (ON-DEMAND) ANALİZ & HIZLI TARAMA MOTORU
 // ==========================================
 async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     let clean = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    
+    // Fuzzy düzeltme (dmy -> DYM vb.)
+    if (FUZZY_MAP[clean]) {
+        clean = FUZZY_MAP[clean];
+    }
+
     if (!clean.endsWith('USDT')) clean += 'USDT';
 
     let symbol = clean;
@@ -766,6 +786,45 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
+// Hızlı Dip/Tepe Tarama Komutu
+async function scanExtremes(type, replyToId = null) {
+    await sendTelegramMessage(`🔍 <b>${type === 'DIP' ? 'Dip Bölgesindeki' : 'Aşırı Şişmiş'} Pariteler Taranıyor...</b> Lütfen bekleyiniz.`, replyToId);
+    const results = [];
+
+    for (const sym of TARGET_COINS.slice(0, 30)) {
+        const k15 = await fetchBybitKlines(sym, "15", 30);
+        await sleep(50);
+        if (!k15 || k15.length < 20) continue;
+
+        const closes = k15.map(k => parseFloat(k[4]));
+        const rsi = calculateRSI(closes, 14);
+        const cur = closes[closes.length - 1];
+
+        if (type === 'DIP' && rsi <= 35) {
+            results.push({ sym: sym.replace('USDT', ''), rsi, price: cur });
+        } else if (type === 'TEPE' && rsi >= 65) {
+            results.push({ sym: sym.replace('USDT', ''), rsi, price: cur });
+        }
+    }
+
+    results.sort((a, b) => type === 'DIP' ? a.rsi - b.rsi : b.rsi - a.rsi);
+
+    if (results.length === 0) {
+        await sendTelegramMessage(`ℹ️ Şu an ${type === 'DIP' ? 'aşırı dipte (RSI <= 35)' : 'aşırı tepede (RSI >= 65)'} parite bulunamadı. Piyasa nötr bölgede.`);
+        return;
+    }
+
+    let text = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n` +
+               `🎯 <b>${type === 'DIP' ? '🟢 EN DİPTEKİ PARİTELER (RSI <= 35)' : '🔴 EN TEPEDEKİ PARİTELER (RSI >= 65)'}</b>\n\n`;
+
+    for (const r of results.slice(0, 5)) {
+        text += `• <b>#${r.sym}:</b> RSI ${r.rsi} | Fiyat: $${formatPrice(r.price, r.price)}\n`;
+    }
+
+    text += `\n💡 <i>Detaylı incelemek istediğin coin için ismini yazman yeterlidir (Örn: ${results[0].sym}).</i>`;
+    await sendTelegramMessage(text);
+}
+
 async function pollTelegramUpdates() {
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=5`;
@@ -779,6 +838,18 @@ async function pollTelegramUpdates() {
                 if (!message || !message.text) continue;
 
                 let txt = message.text.trim();
+                let lowerTxt = txt.toLowerCase();
+
+                if (lowerTxt === 'dip' || lowerTxt === '/dip') {
+                    await scanExtremes('DIP', message.message_id);
+                    continue;
+                }
+
+                if (lowerTxt === 'tepe' || lowerTxt === '/tepe') {
+                    await scanExtremes('TEPE', message.message_id);
+                    continue;
+                }
+
                 let targetCoin = null;
 
                 if (txt.startsWith('/analiz')) {
@@ -786,9 +857,9 @@ async function pollTelegramUpdates() {
                     if (parts[1]) targetCoin = parts[1];
                 } else if (txt.length >= 2 && txt.length <= 12 && !txt.includes(' ') && !txt.startsWith('/')) {
                     targetCoin = txt;
-                } else if (txt.toLowerCase().includes('analiz')) {
+                } else if (lowerTxt.includes('analiz')) {
                     const parts = txt.split(' ');
-                    targetCoin = parts[0] === 'analiz' ? parts[1] : parts[0];
+                    targetCoin = parts[0].toLowerCase() === 'analiz' ? parts[1] : parts[0];
                 }
 
                 if (targetCoin) {
@@ -1017,7 +1088,7 @@ async function scanMarket() {
 // ==========================================
 async function runLoop() {
     console.log("🚀 ScalpPro Adaptif Hibrit Motor Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Tüm orijinal görsel şablonlar, seans/haber takipleri ve adaptif profilleme eksiksiz devrede.");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Yazım hatası toleransı, evrensel coin analizi ve <code>dip</code>/<code>tepe</code> tarama komutları aktif!");
 
     (async () => {
         while (true) {
