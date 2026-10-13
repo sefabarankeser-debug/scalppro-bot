@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Adaptive AI + Stable Engine Active\n');
+    res.end('ScalpPro Adaptive AI + Wick Catcher Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -322,17 +322,16 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
-// BORSAYI KİLİTLEMEYEN GÜVENLİ VE SIRALI TARAMA
 async function scanExtremes(type, replyToId = null) {
     await sendTelegramMessage(`🔍 <b>${type === 'DIP' ? 'Dip Bölgesindeki (RSI <= 38)' : 'Aşırı Şişmiş (RSI >= 62)'} Pariteler Taranıyor...</b> Lütfen bekleyiniz.`, replyToId);
     
     const valid = [];
-    const checkList = TARGET_COINS.slice(0, 35); // En popüler 35 coin
+    const checkList = TARGET_COINS.slice(0, 35);
 
     for (const sym of checkList) {
         try {
             const k15 = await fetchUniversalKlines(sym, "15", 30);
-            await sleep(35); // Borsa DDoS korumasını aşmak için mikro nefes
+            await sleep(35);
             if (!k15 || k15.length < 20) continue;
 
             const closes = k15.map(k => parseFloat(k[4]));
@@ -400,7 +399,81 @@ async function pollTelegramUpdates() {
 }
 
 // ==========================================
-// 6. MULTI-TIMEFRAME TARAMA MOTORU
+// 6. FİTİL (İĞNE UCU) YAKALAMALI İŞLEM TAKİBİ
+// ==========================================
+async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) {
+    const trade = activeTrades.get(symbol);
+    if (!trade) return;
+
+    const cleanSymbol = symbol.replace('USDT', '');
+    const nowTime = getTurkishTimeString();
+
+    if (trade.side === 'LONG') {
+        if (!trade.tp1Hit && currentHigh >= trade.tp1) {
+            trade.tp1Hit = true;
+            trade.sl = trade.entry;
+            tradeHistory.push({ type: 'TP', time: Date.now() });
+            handleTradeResult(symbol, 'TP');
+
+            const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
+            const tp1Msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x ile +%${(gainPct * 10).toFixed(1)})\n\n🛡️ <b>ÖNEMLİ:</b> Stop noktanız <b>GİRİŞ SEVİYESİNE ($${formatPrice(trade.entry, trade.entry)})</b> çekildi.\n\n${getStatsText()}\n⏱ <b>${nowTime} (TSİ)</b>`;
+            await sendTelegramMessage(tp1Msg);
+        }
+
+        if (currentHigh >= trade.tp2) {
+            tradeHistory.push({ type: 'TP', time: Date.now() });
+            handleTradeResult(symbol, 'TP');
+            const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n🚀 <b>Net Kazanç:</b> +%${gainPct} (10x ile +%${(gainPct * 10).toFixed(1)})\n\n${getStatsText()}\n⏱ <b>${nowTime} (TSİ)</b>`);
+            activeTrades.delete(symbol);
+            return;
+        }
+
+        if (currentLow <= trade.sl) {
+            tradeHistory.push({ type: 'STOP', time: Date.now() });
+            handleTradeResult(symbol, 'STOP');
+            const lossPct = (((trade.sl - trade.entry) / trade.entry) * 100).toFixed(2);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n${getStatsText()}\n⏱ <b>${nowTime} (TSİ)</b>`);
+            activeTrades.delete(symbol);
+            return;
+        }
+    }
+
+    if (trade.side === 'SHORT') {
+        if (!trade.tp1Hit && currentLow <= trade.tp1) {
+            trade.tp1Hit = true;
+            trade.sl = trade.entry;
+            tradeHistory.push({ type: 'TP', time: Date.now() });
+            handleTradeResult(symbol, 'TP');
+
+            const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n💰 <b>Kazanılan Kâr:</b> +%${gainPct} (10x ile +%${(gainPct * 10).toFixed(1)})\n\n🛡️ Stop <b>GİRİŞ SEVİYESİNE</b> çekildi.\n\n${getStatsText()}\n⏱ <b>${nowTime} (TSİ)</b>`);
+        }
+
+        if (currentLow <= trade.tp2) {
+            tradeHistory.push({ type: 'TP', time: Date.now() });
+            handleTradeResult(symbol, 'TP');
+            const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n🚀 <b>Net Kazanç:</b> +%${gainPct} (10x ile +%${(gainPct * 10).toFixed(1)})\n\n${getStatsText()}\n⏱ <b>${nowTime} (TSİ)</b>`);
+            activeTrades.delete(symbol);
+            return;
+        }
+
+        if (currentHigh >= trade.sl) {
+            tradeHistory.push({ type: 'STOP', time: Date.now() });
+            handleTradeResult(symbol, 'STOP');
+            const lossPct = (((trade.entry - trade.sl) / trade.entry) * 100).toFixed(2);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)} (${lossPct}%)\n\n${getStatsText()}\n⏱ <b>${nowTime} (TSİ)</b>`);
+            activeTrades.delete(symbol);
+            return;
+        }
+    }
+
+    if (Date.now() - trade.time > 6 * 60 * 60 * 1000) activeTrades.delete(symbol);
+}
+
+// ==========================================
+// 7. MULTI-TIMEFRAME TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -415,12 +488,14 @@ async function scanMarket() {
             if (prof.quarantineUntil > Date.now()) continue;
 
             const klines15m = await fetchUniversalKlines(symbol, "15", 50);
-            await sleep(50); // Tarama döngüsünde güvenli gecikme
+            await sleep(50);
             if (!klines15m || klines15m.length < 35) continue;
             scannedCount++;
 
             const opens15 = klines15m.map(k => parseFloat(k[1])), highs15 = klines15m.map(k => parseFloat(k[2])), lows15 = klines15m.map(k => parseFloat(k[3])), closes15 = klines15m.map(k => parseFloat(k[4]));
             const currentPrice = closes15[closes15.length - 1], currentOpen = opens15[opens15.length - 1], currentHigh = highs15[highs15.length - 1], currentLow = lows15[lows15.length - 1];
+
+            await checkActiveTrades(symbol, currentPrice, currentHigh, currentLow);
 
             const rsi15m = calculateRSI(closes15, 14);
             const isPotentialLong = (rsi15m <= prof.rsiLong), isPotentialShort = (rsi15m >= prof.rsiShort);
@@ -474,11 +549,11 @@ async function scanMarket() {
 }
 
 // ==========================================
-// 7. ANA ÇALIŞTIRICI
+// 8. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
     console.log("🚀 ScalpPro Multi-Exchange Hibrit Motor Başlatıldı...");
-    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> DDoS korumasına takılmayan güvenli sıralı tarama moduna geçildi. <code>Dip</code> ve <code>Tepe</code> komutları tekrar aktif.");
+    await sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> İğne ucu (Fitil) yakalama motoru aktif. TP ve Stop'lar artık High/Low değerlerinden kaçırmadan hesaplanıyor.");
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(15000); }
 }
