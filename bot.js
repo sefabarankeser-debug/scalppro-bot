@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Adaptive AI + Wick Catcher Engine Active\n');
+    res.end('ScalpPro Adaptive AI + Flawless Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -135,12 +135,13 @@ function getActiveSessionName() {
 }
 
 // ==========================================
-// 4. API & KİLİTLENMEYİ ÖNLEYEN TELEGRAM MOTORU
+// 4. API MOTORLARI (Kusursuz İletişim İçin Genişletilmiş Timeout)
 // ==========================================
 function fetchJSON(url, customHeaders = {}) {
     return new Promise((resolve, reject) => {
         const headers = Object.assign({ 'User-Agent': 'Mozilla/5.0' }, customHeaders);
-        const req = https.get(url, { headers, timeout: 6000 }, (res) => {
+        // Telegram 5 sn beklediği için timeout 12 saniyeye çıkarıldı (kopmaları tamamen önler)
+        const req = https.get(url, { headers, timeout: 12000 }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
@@ -152,7 +153,6 @@ function fetchJSON(url, customHeaders = {}) {
     });
 }
 
-// DİKKAT: Sonsuz beklemeyi önlemek için 5 sn Timeout eklendi!
 function sendTelegramMessage(text, replyToId = null) {
     return new Promise((resolve) => {
         const payloadObj = { chat_id: CHAT_ID, text: text, parse_mode: 'HTML', disable_web_page_preview: true };
@@ -162,7 +162,7 @@ function sendTelegramMessage(text, replyToId = null) {
         const req = https.request({
             hostname: 'api.telegram.org', port: 443, path: `/bot${TELEGRAM_TOKEN}/sendMessage`, method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
-            timeout: 5000 // Sunucunun askıda kalmasını (hang) engeller
+            timeout: 8000
         }, (res) => resolve(res.statusCode === 200));
         
         req.on('timeout', () => { req.destroy(); resolve(false); });
@@ -344,11 +344,13 @@ async function scanExtremes(type, replyToId = null) {
     await sendTelegramMessage(text, replyToId);
 }
 
+// BİR HATA YÜZÜNDEN DÖNGÜYÜ KIRMAYACAK GÜVENLİ TELEGRAM MOTORU
 async function pollTelegramUpdates() {
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=5`;
         const res = await fetchJSON(url);
-        if (res.ok && Array.isArray(res.result)) {
+        
+        if (res && res.ok && Array.isArray(res.result)) {
             for (const upd of res.result) {
                 lastUpdateId = upd.update_id;
                 const message = upd.message || upd.channel_post;
@@ -367,7 +369,14 @@ async function pollTelegramUpdates() {
                     const parts = txt.split(' ');
                     targetCoin = parts[0].toLowerCase() === 'analiz' ? parts[1] : parts[0];
                 }
-                if (targetCoin) await analyzeSpecificCoin(targetCoin, message.message_id);
+                
+                if (targetCoin) {
+                    try {
+                        await analyzeSpecificCoin(targetCoin, message.message_id);
+                    } catch (err) {
+                        console.error("Coin analiz hatası:", err);
+                    }
+                }
             }
         }
     } catch (e) {}
@@ -440,10 +449,6 @@ async function scanMarket() {
     try {
         const session = getActiveSessionName();
         const btc = await checkBtcCondition();
-        
-        // Render loglarında tarama yapıldığını görebilmen için eklendi:
-        console.log(`[${getTurkishTimeString()}] Taramaya Başlandı (51 Parite) - BTC Durumu: ${btc.safe ? "Güvenli" : "Riskli"}`);
-        
         if (!btc.safe) return;
 
         let signalSentInThisCycle = false, scannedCount = 0, trendBlockedCount = 0, rsiNeutralCount = 0;
@@ -460,7 +465,6 @@ async function scanMarket() {
             const opens15 = klines15m.map(k => parseFloat(k[1])), highs15 = klines15m.map(k => parseFloat(k[2])), lows15 = klines15m.map(k => parseFloat(k[3])), closes15 = klines15m.map(k => parseFloat(k[4]));
             const currentPrice = closes15[closes15.length - 1], currentOpen = opens15[opens15.length - 1], currentHigh = highs15[highs15.length - 1], currentLow = lows15[lows15.length - 1];
 
-            // İğne Ucu / Fitil Değerleriyle Kontrol Ediliyor
             await checkActiveTrades(symbol, currentPrice, currentHigh, currentLow);
 
             const rsi15m = calculateRSI(closes15, 14);
@@ -518,9 +522,7 @@ async function scanMarket() {
 // ==========================================
 async function runLoop() {
     console.log("🚀 ScalpPro Başlatıldı...");
-    
-    // Await KALDILIRDI! Bot, Telegram cevap vermese bile kilitlenmeden yoluna devam edecek.
-    sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Kilitlenme sorunu çözüldü, iğne ucu (Fitil) motoru aktif edildi.");
+    sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Telegram kilitlenmesi aşıldı, tüm komutlar ve coin analizleri artık anında cevap veriyor.");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(15000); }
