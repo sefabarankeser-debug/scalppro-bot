@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Adaptive AI + Stoch RSI Active\n');
+    res.end('ScalpPro Expanded Sepet + Stoch RSI Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -24,7 +24,7 @@ const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = "-1004412694884";
 
 // ==========================================
-// 2. ADAPTİF PROFİLLER (STOCH RSI EŞİKLERİ)
+// 2. ADAPTİF PROFİLLER VE GENİŞLETİLMİŞ SEPET (70+ PARİTE)
 // ==========================================
 const BASE_PROFILES = {
     MAJOR: { category: "💎 Majör / Trend Sadık", stochLong: 20, stochShort: 80, atrMultiplier: 1.3, maxLsRatio: 68 },
@@ -33,11 +33,18 @@ const BASE_PROFILES = {
 };
 
 const COIN_ASSIGNMENTS = {
-    "SOLUSDT": "MAJOR", "AVAXUSDT": "MAJOR", "NEARUSDT": "MAJOR", "LINKUSDT": "MAJOR",
-    "UNIUSDT": "MAJOR", "LTCUSDT": "MAJOR", "BCHUSDT": "MAJOR", "ETCUSDT": "MAJOR",
-    "ATOMUSDT": "MAJOR", "FILUSDT": "MAJOR", "ALGOUSDT": "MAJOR",
+    // Majörler
+    "BTCUSDT": "MAJOR", "ETHUSDT": "MAJOR", "SOLUSDT": "MAJOR", "AVAXUSDT": "MAJOR", 
+    "NEARUSDT": "MAJOR", "LINKUSDT": "MAJOR", "UNIUSDT": "MAJOR", "LTCUSDT": "MAJOR", 
+    "BCHUSDT": "MAJOR", "ETCUSDT": "MAJOR", "ATOMUSDT": "MAJOR", "FILUSDT": "MAJOR", 
+    "ALGOUSDT": "MAJOR", "XRPUSDT": "MAJOR", "ADAUSDT": "MAJOR", "BNBUSDT": "MAJOR",
+    
+    // Meme Coinler
     "DOGEUSDT": "MEME", "1000PEPEUSDT": "MEME", "WIFUSDT": "MEME", "1000SHIBUSDT": "MEME",
     "1000FLOKIUSDT": "MEME", "1000BONKUSDT": "MEME", "NEIROUSDT": "MEME", "NOTUSDT": "MEME",
+    "POPCATUSDT": "MEME", "BOMEUSDT": "MEME",
+    
+    // Oynak ve Popüler Altcoinler (Yeni eklenenler dahil)
     "DYMUSDT": "VOLATILE_ALT", "STRKUSDT": "VOLATILE_ALT", "WLDUSDT": "VOLATILE_ALT",
     "SUIUSDT": "VOLATILE_ALT", "APTUSDT": "VOLATILE_ALT", "TAOUSDT": "VOLATILE_ALT",
     "FETUSDT": "VOLATILE_ALT", "SEIUSDT": "VOLATILE_ALT", "ARKMUSDT": "VOLATILE_ALT",
@@ -49,7 +56,15 @@ const COIN_ASSIGNMENTS = {
     "CFXUSDT": "VOLATILE_ALT", "JTOUSDT": "VOLATILE_ALT", "CRVUSDT": "VOLATILE_ALT",
     "DYDXUSDT": "VOLATILE_ALT", "GMXUSDT": "VOLATILE_ALT", "FTMUSDT": "VOLATILE_ALT",
     "SANDUSDT": "VOLATILE_ALT", "MANAUSDT": "VOLATILE_ALT", "THETAUSDT": "VOLATILE_ALT",
-    "ZROUSDT": "VOLATILE_ALT", "PYTHUSDT": "VOLATILE_ALT", "WUSDT": "VOLATILE_ALT"
+    "ZROUSDT": "VOLATILE_ALT", "PYTHUSDT": "VOLATILE_ALT", "WUSDT": "VOLATILE_ALT",
+    // Yeni Eklenen Güçlü Pariteler
+    "POLUSDT": "VOLATILE_ALT", "HBARUSDT": "VOLATILE_ALT", "SANTOSUSDT": "VOLATILE_ALT",
+    "OMUSDT": "VOLATILE_ALT", "IMXUSDT": "VOLATILE_ALT", "AXSUSDT": "VOLATILE_ALT",
+    "CHZUSDT": "VOLATILE_ALT", "GMTUSDT": "VOLATILE_ALT", "ICPUSDT": "MAJOR",
+    "KASUSDT": "VOLATILE_ALT", "MANTAUSDT": "VOLATILE_ALT", "ALTUSDT": "VOLATILE_ALT",
+    "NTRNUSDT": "VOLATILE_ALT", "PORTALUSDT": "VOLATILE_ALT", "SAGAUSDT": "VOLATILE_ALT",
+    "TNSRUSDT": "VOLATILE_ALT", "BBUSDT": "VOLATILE_ALT", "IOUSDT": "VOLATILE_ALT",
+    "ZKUSDT": "VOLATILE_ALT", "REZUSDT": "VOLATILE_ALT"
 };
 
 const dynamicCoinMemory = new Map();
@@ -93,7 +108,7 @@ let lastStatusReportTime = 0;
 const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
 const FUZZY_MAP = {
     "DMY": "DYM", "PEP": "PEPE", "SHIBA": "SHIB", "DOG": "DOGE", "FLOK": "FLOKI",
-    "BON": "BONK", "LNK": "LINK", "AVX": "AVAX", "NOTC": "NOT", "STR": "STRK", "APTOS": "APT"
+    "BON": "BONK", "LNK": "LINK", "AVX": "AVAX", "NOTC": "NOT", "STR": "STRK", "APTOS": "APT", "POL": "POL"
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -266,7 +281,6 @@ function calculateRSI(closes, period = 14) {
     return Math.round(100 - (100 / (1 + (avgGain / avgLoss))));
 }
 
-// YENİ: Stoch RSI Hesaplama Motoru (%14 Stoch, %14 RSI, %3 K, %3 D)
 function calculateStochRSI(closes, period = 14, kSmooth = 3, dSmooth = 3) {
     if (!Array.isArray(closes) || closes.length < period * 2) return { k: 50, d: 50 };
     
@@ -291,7 +305,6 @@ function calculateStochRSI(closes, period = 14, kSmooth = 3, dSmooth = 3) {
 
     if (stochValues.length < kSmooth) return { k: 50, d: 50 };
 
-    // %K Düzeltmesi
     const kValues = [];
     for (let i = kSmooth - 1; i < stochValues.length; i++) {
         const slice = stochValues.slice(i - kSmooth + 1, i + 1);
@@ -299,7 +312,6 @@ function calculateStochRSI(closes, period = 14, kSmooth = 3, dSmooth = 3) {
         kValues.push(avgK);
     }
 
-    // %D Düzeltmesi
     const dValues = [];
     for (let i = dSmooth - 1; i < kValues.length; i++) {
         const slice = kValues.slice(i - dSmooth + 1, i + 1);
@@ -410,10 +422,10 @@ async function scanExtremes(type, replyToId = null) {
     await sendTelegramMessage(`🔍 <b>${type === 'DIP' ? 'Stoch Dip Bölgesindeki (%K <= 20)' : 'Stoch Tepe Bölgesindeki (%K >= 80)'} Pariteler Taranıyor...</b>`, replyToId);
     
     const valid = [];
-    for (const sym of TARGET_COINS.slice(0, 35)) {
+    for (const sym of TARGET_COINS.slice(0, 45)) {
         try {
             const k15 = await fetchUniversalKlines(sym, "15", 40);
-            await sleep(35);
+            await sleep(30);
             if (!k15 || k15.length < 25) continue;
             const closes = k15.map(k => parseFloat(k[4]));
             const stoch = calculateStochRSI(closes);
@@ -537,7 +549,7 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
 }
 
 // ==========================================
-// 7. TOP-DOWN TARAMA MOTORU (STOCH RSI İLE)
+// 7. TOP-DOWN TARAMA MOTORU (GENİŞLETİLMİŞ SEPET)
 // ==========================================
 async function scanMarket() {
     try {
@@ -553,7 +565,7 @@ async function scanMarket() {
 
             // ADIM 1: 1H TREND & ŞELALE KONTROLÜ
             const klines1h = await fetchUniversalKlines(symbol, "60", 60);
-            await sleep(35);
+            await sleep(30);
             if (!klines1h || klines1h.length < 25) continue;
             const closes1h = klines1h.map(k => parseFloat(k[4]));
             const rsi1h = calculateRSI(closes1h, 14);
@@ -564,13 +576,13 @@ async function scanMarket() {
 
             // ADIM 2: 4H MAKRO KONTROLÜ
             const klines4h = await fetchUniversalKlines(symbol, "240", 60);
-            await sleep(35);
+            await sleep(30);
             let candleData = { reportText: "⚠️ 4H Verisi Alınamadı", isBearDominance: false, isBullDominance: false };
             if (klines4h && klines4h.length >= 20) candleData = analyze4HCandles(klines4h);
 
             // ADIM 3: 15M STOCH RSI TETİK KONTROLÜ
             const klines15m = await fetchUniversalKlines(symbol, "15", 55);
-            await sleep(35);
+            await sleep(30);
             if (!klines15m || klines15m.length < 40) continue;
             scannedCount++;
 
@@ -627,7 +639,7 @@ async function scanMarket() {
         }
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] STOCH RSI TOP-DOWN RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>İncelenen:</b> ${scannedCount} Parite\n⚡ <b>BTC Durumu:</b> %${btc.change15m}\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>1H/4H Makro & Şelale Filtresi:</b> ${trendBlockedCount} Parite\n• <b>Stoch Nötr Bölge:</b> ${stochNeutralCount} Parite\n\n${getStatsText()}\n\n⚠️ <i>"YTD" HEPSİ.</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] GENİŞLETİLMİŞ SEPET RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>İncelenen:</b> ${scannedCount} Parite\n⚡ <b>BTC Durumu:</b> %${btc.change15m}\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>1H/4H Makro & Şelale Filtresi:</b> ${trendBlockedCount} Parite\n• <b>Stoch Nötr Bölge:</b> ${stochNeutralCount} Parite\n\n${getStatsText()}\n\n⚠️ <i>"YTD" HEPSİ.</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -637,8 +649,8 @@ async function scanMarket() {
 // 8. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Stoch RSI Başlatıldı...");
-    sendTelegramMessage("⚡ <b>Sistem Güncellendi:</b> 15 Dakikalık tetik mekanizmasına gerçek zamanlı <b>Stoch RSI (%K / %D)</b> entegre edildi. Artık dip ve tepe dönüşleri çok daha erken yakalanacak.");
+    console.log("🚀 ScalpPro Genişletilmiş Sepet Başlatıldı...");
+    sendTelegramMessage("🌐 <b>Sistem Güncellendi:</b> Sepet genişletildi! Majörler, meme coinler ve güçlü hacimli altcoinlerle birlikte toplam <b>70+ parite</b> Stoch RSI motoruyla taranmaya başlandı.");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(15000); }
