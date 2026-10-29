@@ -232,7 +232,7 @@ function analyze4HCandles(klines4h) {
     return { reportText: `🕯️ <b>4H Makro Mum Yapısı (Bilgilendirme):</b>\n<pre>${lines.join('\n')}\n ↳ 4H Net Yön: ${netTrendText}</pre>`, netGain, isBullDominance, isBearDominance };
 }
 
-// YENİ: 1 Saatlik Şelale ve Füze (Momentum) Kontrolü
+// 1 Saatlik Şelale ve Füze (Momentum) Kontrolü
 function analyze1HMomentum(klines1h) {
     if (!klines1h || klines1h.length < 2) return { isWaterfall: false, isRocket: false, curChange: 0, prevChange: 0 };
     const cur = klines1h[klines1h.length - 1];
@@ -244,9 +244,7 @@ function analyze1HMomentum(klines1h) {
     const curChange = ((curClose - curOpen) / curOpen) * 100;
     const prevChange = ((prevClose - prevOpen) / prevOpen) * 100;
 
-    // Anlık mum veya önceki kapanan mum %-0.85'ten daha sert kırmızıysa ŞELALE var demektir (Long tehlikeli)
     const isWaterfall = curChange <= -0.85 || (prevChange <= -0.95 && curChange < 0.15);
-    // Anlık mum veya önceki kapanan mum +%0.85'ten daha sert yeşilse FÜZE var demektir (Short tehlikeli)
     const isRocket = curChange >= 0.85 || (prevChange >= 0.95 && curChange > -0.15);
 
     return { isWaterfall, isRocket, curChange: curChange.toFixed(2), prevChange: prevChange.toFixed(2) };
