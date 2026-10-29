@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Turbo + Stoch Crossover + Wick Shield Active\n');
+    res.end('ScalpPro Turbo + Stoch Crossover + Optimized 87 Coins Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -24,9 +24,8 @@ const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = "-1004412694884";
 
 // ==========================================
-// 2. ADAPTİF PROFİLLER VE GENİŞLETİLMİŞ SEPET (77 PARİTE)
+// 2. ADAPTİF PROFİLLER VE SEÇİCİ SEPET (87 PARİTE)
 // ==========================================
-// Stoch RSI Kesişim Bölgesi Eşikleri (Kesişim olduğu için biraz daha esnek ve erken yakalar)
 const BASE_PROFILES = {
     MAJOR: { category: "💎 Majör / Trend Sadık", stochLong: 28, stochShort: 72, atrMultiplier: 1.4, maxLsRatio: 68 },
     MEME: { category: "🐸 Meme / Ekstrem Volatilite", stochLong: 22, stochShort: 78, atrMultiplier: 2.0, maxLsRatio: 64 },
@@ -34,18 +33,19 @@ const BASE_PROFILES = {
 };
 
 const COIN_ASSIGNMENTS = {
-    // Majörler
+    // Majörler ve Yüksek Hacimli Temeller
     "BTCUSDT": "MAJOR", "ETHUSDT": "MAJOR", "SOLUSDT": "MAJOR", "AVAXUSDT": "MAJOR", 
     "NEARUSDT": "MAJOR", "LINKUSDT": "MAJOR", "UNIUSDT": "MAJOR", "LTCUSDT": "MAJOR", 
     "BCHUSDT": "MAJOR", "ETCUSDT": "MAJOR", "ATOMUSDT": "MAJOR", "FILUSDT": "MAJOR", 
-    "ALGOUSDT": "MAJOR", "XRPUSDT": "MAJOR", "ADAUSDT": "MAJOR", "BNBUSDT": "MAJOR", "ICPUSDT": "MAJOR",
+    "ALGOUSDT": "MAJOR", "XRPUSDT": "MAJOR", "ADAUSDT": "MAJOR", "BNBUSDT": "MAJOR", 
+    "ICPUSDT": "MAJOR", "TRXUSDT": "MAJOR", "HYPEUSDT": "MAJOR", "ZECUSDT": "MAJOR",
     
     // Meme Coinler
     "DOGEUSDT": "MEME", "1000PEPEUSDT": "MEME", "WIFUSDT": "MEME", "1000SHIBUSDT": "MEME",
     "1000FLOKIUSDT": "MEME", "1000BONKUSDT": "MEME", "NEIROUSDT": "MEME", "NOTUSDT": "MEME",
     "POPCATUSDT": "MEME", "BOMEUSDT": "MEME",
     
-    // Oynak ve Popüler Altcoinler
+    // Oynak ve Stoch RSI Uyumlu Popüler Altcoinler
     "DYMUSDT": "VOLATILE_ALT", "STRKUSDT": "VOLATILE_ALT", "WLDUSDT": "VOLATILE_ALT",
     "SUIUSDT": "VOLATILE_ALT", "APTUSDT": "VOLATILE_ALT", "TAOUSDT": "VOLATILE_ALT",
     "FETUSDT": "VOLATILE_ALT", "SEIUSDT": "VOLATILE_ALT", "ARKMUSDT": "VOLATILE_ALT",
@@ -107,7 +107,7 @@ let lastStatusReportTime = 0;
 const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
 const FUZZY_MAP = {
     "DMY": "DYM", "PEP": "PEPE", "SHIBA": "SHIB", "DOG": "DOGE", "FLOK": "FLOKI",
-    "BON": "BONK", "LNK": "LINK", "AVX": "AVAX", "NOTC": "NOT", "STR": "STRK", "APTOS": "APT", "POL": "POL"
+    "BON": "BONK", "LNK": "LINK", "AVX": "AVAX", "NOTC": "NOT", "STR": "STRK", "APTOS": "APT", "POL": "POL", "TRX": "TRX", "HYPE": "HYPE", "ZEC": "ZEC"
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -280,7 +280,6 @@ function calculateRSI(closes, period = 14) {
     return 100 - (100 / (1 + (avgGain / avgLoss)));
 }
 
-// YENİ: Gerçek Stoch RSI + %K / %D Kesişim ve Dönüş Tespiti
 function calculateStochRSI(closes, period = 14, kSmooth = 3, dSmooth = 3) {
     if (!Array.isArray(closes) || closes.length < period * 2 + 5) {
         return { k: 50, d: 50, prevK: 50, prevD: 50, bullCross: false, bearCross: false };
@@ -320,9 +319,7 @@ function calculateStochRSI(closes, period = 14, kSmooth = 3, dSmooth = 3) {
     const prevK = Math.round(kValues[kValues.length - 2] ?? 50);
     const prevD = Math.round(dValues[dValues.length - 2] ?? 50);
 
-    // Kesişim Onayı: Mavi (%K) çizgi Turuncu (%D) çizginin üstüne çıkmış VE yönünü yukarı çevirmiş olmalı!
     const bullCross = (k > d && k > prevK && (prevK <= prevD + 2 || k - d >= 2));
-    // Short Kesişim Onayı: Mavi (%K) çizgi Turuncu (%D) çizginin altına inmiş VE yönünü aşağı çevirmiş olmalı!
     const bearCross = (k < d && k < prevK && (prevK >= prevD - 2 || d - k >= 2));
 
     return { k, d, prevK, prevD, bullCross, bearCross };
@@ -360,7 +357,6 @@ async function fetchUniversalKlines(symbol, interval, limit) {
     return null;
 }
 
-// YENİ: Hassaslaştırılmış BTC Kalkanı (%-0.30 düşüşte bile Long açtırmaz!)
 async function checkBtcCondition() {
     const list = await fetchUniversalKlines("BTCUSDT", "15", 30);
     if (!list || list.length < 3) return { safe: true, btcTrend: "NEUTRAL", change15m: "0.00" };
@@ -368,7 +364,6 @@ async function checkBtcCondition() {
     const openCurrent = parseFloat(list[list.length - 1][1]);
     const openPrev = parseFloat(list[list.length - 2][1]);
     
-    // Son 2 mumun (veya aktif mumun) en sert değişimini baz al
     const changeCur = ((currentPrice - openCurrent) / openCurrent) * 100;
     const changeTwo = ((currentPrice - openPrev) / openPrev) * 100;
     const worstChange = Math.abs(changeCur) > Math.abs(changeTwo) ? changeCur : changeTwo;
@@ -442,10 +437,10 @@ async function scanExtremes(type, replyToId = null) {
     await sendTelegramMessage(`🔍 <b>${type === 'DIP' ? 'Stoch Dip & Dönüş Bölgesindeki (%K <= 25)' : 'Stoch Tepe & Dönüş Bölgesindeki (%K >= 75)'} Pariteler Taranıyor...</b>`, replyToId);
     
     const valid = [];
-    for (const sym of TARGET_COINS.slice(0, 45)) {
+    for (const sym of TARGET_COINS.slice(0, 50)) {
         try {
             const k15 = await fetchUniversalKlines(sym, "15", 50);
-            await sleep(15);
+            await sleep(12);
             if (!k15 || k15.length < 35) continue;
             const closes = k15.map(k => parseFloat(k[4]));
             const stoch = calculateStochRSI(closes);
@@ -572,7 +567,7 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
 }
 
 // ==========================================
-// 7. TURBO HIZLI TARAMA MOTORU (ÖNCE 15M KESİŞİM -> SONRA 1H/4H ONAY)
+// 7. TURBO HIZLI TARAMA MOTORU (87 PARİTE)
 // ==========================================
 async function scanMarket() {
     try {
@@ -586,9 +581,9 @@ async function scanMarket() {
             const prof = getCoinProfile(symbol);
             if (prof.quarantineUntil > Date.now()) continue;
 
-            // ADIM 1: TURBO HIZ İÇİN ÖNCE 15M GRAFİĞİ VE AKTİF İŞLEMLERİ KONTROL ET (77 Coin 15 Saniyede Taranır!)
+            // Önce 15M Grafiği Kontrol Et (87 Coin çok hızlı taranır)
             const klines15m = await fetchUniversalKlines(symbol, "15", 55);
-            await sleep(12);
+            await sleep(10);
             if (!klines15m || klines15m.length < 40) continue;
             scannedCount++;
 
@@ -604,17 +599,13 @@ async function scanMarket() {
 
             await checkActiveTrades(symbol, currentPrice, currentHigh, currentLow);
 
-            // GERÇEK STOCH RSI KESİŞİM VE FİTİL (İĞNE UCU) KONTROLÜ
             const stoch15m = calculateStochRSI(closes15);
             
-            // Fitil veya Yeşil/Kırmızı Dönüş Mumu Onayı (Düşen Bıçağı Tutmamak İçin!)
             const bodySize = Math.abs(currentPrice - currentOpen);
             const lowerWick = Math.min(currentOpen, currentPrice) - currentLow;
             const upperWick = currentHigh - Math.max(currentOpen, currentPrice);
             
-            // Long için ya alt iğne olmalı ya da aktif mum yeşile dönmüş olmalı
             const hasBullReversalCandle = (lowerWick >= bodySize * 0.25) || (currentPrice > currentOpen);
-            // Short için ya üst iğne olmalı ya da aktif mum kırmızıya dönmüş olmalı
             const hasBearReversalCandle = (upperWick >= bodySize * 0.25) || (currentPrice < currentOpen);
 
             const isPotentialLong = (stoch15m.k <= prof.stochLong && stoch15m.bullCross && hasBullReversalCandle && btc.btcTrend !== "DUMP");
@@ -622,10 +613,10 @@ async function scanMarket() {
 
             if (!isPotentialLong && !isPotentialShort) {
                 stochNeutralCount++;
-                continue; // 15M'de kesişim yoksa boşuna 1H ve 4H API isteği atıp vakit kaybetme!
+                continue;
             }
 
-            // ADIM 2: SADECE 15M'DE KESİŞİM YAKALANAN ADAY COİNLER İÇİN 1H VE 4H MAKRO ONAY ÇEK
+            // Kesişim yakalanan adaylar için 1H ve 4H makro teyidi çek
             const klines1h = await fetchUniversalKlines(symbol, "60", 55);
             const klines4h = await fetchUniversalKlines(symbol, "240", 55);
             if (!klines1h || klines1h.length < 25) continue;
@@ -636,7 +627,6 @@ async function scanMarket() {
             const currentPrice1h = closes1h[closes1h.length - 1];
             const mom1h = analyze1HMomentum(klines1h);
 
-            // Esnetilmiş 1H Trend: Tam tepede değil, dönüşlerde de yakalaması için EMA50'ye %0.5 yakınlık veya RSI gücü yeterli
             const canLong1H = ((currentPrice1h >= ema50_1h * 0.995 && rsi1h >= 44) || rsi1h >= 51) && !mom1h.isWaterfall;
             const canShort1H = ((currentPrice1h <= ema50_1h * 1.005 && rsi1h <= 56) || rsi1h <= 49) && !mom1h.isRocket;
 
@@ -648,7 +638,6 @@ async function scanMarket() {
                 continue;
             }
 
-            // ADIM 3: TÜM KALKANLAR GEÇİLDİ, L/S KONTROLÜ VE SİNYAL GÖNDERİMİ
             const lsData = await fetchLongShortRatio(symbol);
             const atr15 = calculateATR(highs15, lows15, closes15, 14);
             const cleanSymbol = symbol.replace('USDT', '');
@@ -696,7 +685,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta (Longlar Kilitli)" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda (Shortlar Kilitli)" : "⚪ Sakin / Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TURBO KESİŞİM TARAMA RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>Hızlı Taranan:</b> ${scannedCount} Parite (Süre: ~15 sn)\n⚡ <b>BTC Kalkanı:</b> %${btc.change15m} (${btcBadge})\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>15M Stoch Kesişimi / Fitil Bekleyen:</b> ${stochNeutralCount} Parite\n• <b>1H/4H Makro & Şelale Kalkanına Takılan:</b> ${macroBlockedCount} Parite\n\n${getStatsText()}\n\n⚠️ <i>"YTD" HEPSİ.</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TURBO KESİŞİM TARAMA RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>Hızlı Taranan:</b> ${scannedCount} Parite (Süre: ~15-20 sn)\n⚡ <b>BTC Kalkanı:</b> %${btc.change15m} (${btcBadge})\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>15M Stoch Kesişimi / Fitil Bekleyen:</b> ${stochNeutralCount} Parite\n• <b>1H/4H Makro & Şelale Kalkanına Takılan:</b> ${macroBlockedCount} Parite\n\n${getStatsText()}\n\n⚠️ <i>"YTD" HEPSİ.</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -706,8 +695,8 @@ async function scanMarket() {
 // 8. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Turbo Crossover Başlatıldı...");
-    sendTelegramMessage("⚡ <b>SİSTEM CERRAHİ GÜNCELLEME:</b>\n1️⃣ <b>Stoch RSI Kesişim Şartı (%K > %D):</b> Artık düşen bıçağa atlamak yok, dipten yukarı kesişim şart!\n2️⃣ <b>Fitil (İğne Ucu) Koruması:</b> Geri getirildi.\n3️⃣ <b>Hassas BTC Kalkanı:</b> BTC %-0.30 düşerken Long açılması tamamen kilitlendi.\n4️⃣ <b>3x Turbo Tarama:</b> 77 paritenin taranma süresi 3 dakikadan 15 saniyeye indirildi!");
+    console.log("🚀 ScalpPro Turbo Crossover (87 Coins) Başlatıldı...");
+    sendTelegramMessage("🌐 <b>SİSTEM GÜNCELLENDİ:</b>\nSepet optimize edilerek güçlü hacimli paritelerle birlikte **87 adete** çıkarıldı. TRX, HYPE, ZEC gibi yeni majör ve yüksek hacimli altcoinler sisteme eklendi!");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(10000); }
