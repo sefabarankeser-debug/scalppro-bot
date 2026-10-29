@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Adaptive AI + Top-Down (Macro>Micro) Engine Active\n');
+    res.end('ScalpPro Adaptive AI + Top-Down Golden Ratio Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -24,12 +24,12 @@ const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = "-1004412694884";
 
 // ==========================================
-// 2. ADAPTİF PROFİLLER VE COİN KATEGORİLERİ
+// 2. ADAPTİF PROFİLLER (ALTIN ORAN RSI EŞİKLERİ)
 // ==========================================
 const BASE_PROFILES = {
-    MAJOR: { category: "💎 Majör / Trend Sadık", rsiLong: 40, rsiShort: 60, atrMultiplier: 1.3, maxLsRatio: 68 },
-    MEME: { category: "🐸 Meme / Ekstrem Volatilite", rsiLong: 33, rsiShort: 68, atrMultiplier: 2.0, maxLsRatio: 64 },
-    VOLATILE_ALT: { category: "⚡ Sığ Tahta / Yüksek Oynaklık", rsiLong: 35, rsiShort: 65, atrMultiplier: 1.8, maxLsRatio: 62 }
+    MAJOR: { category: "💎 Majör / Trend Sadık", rsiLong: 45, rsiShort: 55, atrMultiplier: 1.3, maxLsRatio: 68 },
+    MEME: { category: "🐸 Meme / Ekstrem Volatilite", rsiLong: 38, rsiShort: 62, atrMultiplier: 2.0, maxLsRatio: 64 },
+    VOLATILE_ALT: { category: "⚡ Sığ Tahta / Yüksek Oynaklık", rsiLong: 40, rsiShort: 60, atrMultiplier: 1.8, maxLsRatio: 62 }
 };
 
 const COIN_ASSIGNMENTS = {
@@ -68,8 +68,8 @@ function handleTradeResult(symbol, resultType) {
     if (resultType === 'STOP') {
         prof.totalStops++;
         prof.consecutiveStops++;
-        prof.rsiLong = Math.max(22, prof.rsiLong - 2);
-        prof.rsiShort = Math.min(78, prof.rsiShort + 2);
+        prof.rsiLong = Math.max(25, prof.rsiLong - 2);
+        prof.rsiShort = Math.min(75, prof.rsiShort + 2);
         prof.atrMultiplier = parseFloat((prof.atrMultiplier + 0.15).toFixed(2));
         if (prof.consecutiveStops >= 3) {
             prof.quarantineUntil = Date.now() + (24 * 60 * 60 * 1000);
@@ -323,7 +323,7 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
         rsi4h = calculateRSI(closes4h, 14);
     }
 
-    let trendText = currentPrice > ema50_1h && rsi1h >= 50 ? "🟢 Yükseliş Trendi (Boğa)" : currentPrice < ema50_1h && rsi1h <= 50 ? "🔴 Düşüş Trendi (Ayı)" : "⚪ Yatay / Kararsız";
+    let trendText = currentPrice > ema50_1h && rsi1h >= 48 ? "🟢 Yükseliş Trendi (Boğa)" : currentPrice < ema50_1h && rsi1h <= 52 ? "🔴 Düşüş Trendi (Ayı)" : "⚪ Yatay / Kararsız";
     const lsData = await fetchLongShortRatio(symbol);
     const candleData = analyze4HCandles(klines4h);
     const prof = getCoinProfile(symbol);
@@ -334,12 +334,12 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     else if (rsi15m <= prof.rsiLong && currentPrice > ema50_1h && lsData.longPct < prof.maxLsRatio) verdict = `🟢 LONG Fırsat Bölgesi (Özel Eşik: ${prof.rsiLong})`;
     else if (rsi15m >= prof.rsiShort && currentPrice < ema50_1h && lsData.shortPct < prof.maxLsRatio) verdict = `🔴 SHORT Fırsat Bölgesi (Özel Eşik: ${prof.rsiShort})`;
 
-    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Ana Trend:</b> ${trendText} (RSI: ${rsi1h})\n⚡ <b>15dk RSI:</b> ${rsi15m} (Hedef Eşiği: ${prof.rsiLong})\n📊 <b>4H Makro Bilgi:</b> RSI ${rsi4h}\n🎯 <b>Sistem Değerlendirmesi:</b> <b>${verdict}</b>\n\n⚙️ <b>Coin Özel Parametresi:</b>\n• Profil: ${prof.category}\n• Optimize ATR: ${prof.atrMultiplier}x | Maks L/S: %${prof.maxLsRatio}\n\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Ana Trend:</b> ${trendText} (RSI: ${rsi1h})\n⚡ <b>15dk RSI:</b> ${rsi15m} (Long Eşiği: ${prof.rsiLong} | Short Eşiği: ${prof.rsiShort})\n📊 <b>4H Makro Bilgi:</b> RSI ${rsi4h}\n🎯 <b>Sistem Değerlendirmesi:</b> <b>${verdict}</b>\n\n⚙️ <b>Coin Özel Parametresi:</b>\n• Profil: ${prof.category}\n• Optimize ATR: ${prof.atrMultiplier}x | Maks L/S: %${prof.maxLsRatio}\n\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
 async function scanExtremes(type, replyToId = null) {
-    await sendTelegramMessage(`🔍 <b>${type === 'DIP' ? 'Dip Bölgesindeki (RSI <= 38)' : 'Aşırı Şişmiş (RSI >= 62)'} Pariteler Taranıyor...</b> Lütfen bekleyiniz.`, replyToId);
+    await sendTelegramMessage(`🔍 <b>${type === 'DIP' ? 'Dip Bölgesindeki (RSI <= 42)' : 'Aşırı Şişmiş (RSI >= 58)'} Pariteler Taranıyor...</b> Lütfen bekleyiniz.`, replyToId);
     
     const valid = [];
     for (const sym of TARGET_COINS.slice(0, 35)) {
@@ -351,15 +351,15 @@ async function scanExtremes(type, replyToId = null) {
             const rsi = calculateRSI(closes, 14);
             const cur = closes[closes.length - 1];
             
-            if (type === 'DIP' && rsi <= 38) valid.push({ sym: sym.replace('USDT', ''), rsi, price: cur });
-            else if (type === 'TEPE' && rsi >= 62) valid.push({ sym: sym.replace('USDT', ''), rsi, price: cur });
+            if (type === 'DIP' && rsi <= 42) valid.push({ sym: sym.replace('USDT', ''), rsi, price: cur });
+            else if (type === 'TEPE' && rsi >= 58) valid.push({ sym: sym.replace('USDT', ''), rsi, price: cur });
         } catch (e) {}
     }
 
     valid.sort((a, b) => type === 'DIP' ? a.rsi - b.rsi : b.rsi - a.rsi);
 
     if (valid.length === 0) {
-        return sendTelegramMessage(`ℹ️ Şu an ${type === 'DIP' ? 'aşırı dipte (RSI <= 38)' : 'aşırı tepede (RSI >= 62)'} parite bulunamadı.`, replyToId);
+        return sendTelegramMessage(`ℹ️ Şu an ${type === 'DIP' ? 'dipte (RSI <= 42)' : 'tepede (RSI >= 58)'} parite bulunamadı.`, replyToId);
     }
 
     let text = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>${type === 'DIP' ? '🟢 EN DİPTEKİ PARİTELER' : '🔴 EN TEPEDEKİ PARİTELER'}</b>\n\n`;
@@ -510,17 +510,15 @@ async function scanMarket() {
             const currentPrice = closes15[closes15.length - 1], currentOpen = opens15[opens15.length - 1];
             const currentHigh = highs15[highs15.length - 1], currentLow = lows15[lows15.length - 1];
 
-            // Açık işlem varsa iğne uçlarıyla (15M) takip et
             await checkActiveTrades(symbol, currentPrice, currentHigh, currentLow);
 
-            // KARAR ANI 1: Eğer Ana Yön yataysa veya 4 Saatlik Makro Yön tamamen tersiyse, 
-            // 15 Dakikalıkta fırsat bile olsa işlem açma ve Rapor için say.
+            // KARAR ANI 1: Makro Filtre Kontrolü
             if (mainTrend === "NEUTRAL" || (mainTrend === "BULL" && candleData.isBearDominance) || (mainTrend === "BEAR" && candleData.isBullDominance)) {
                 trendBlockedCount++;
                 continue;
             }
 
-            // KARAR ANI 2: Makrolar ONAY verdi. Şimdi 15M RSI'da Pusu/Tetik kontrolü yap.
+            // KARAR ANI 2: Altın Oran 15M RSI Tetik Kontrolü
             const rsi15m = calculateRSI(closes15, 14);
             const isPotentialLong = (rsi15m <= prof.rsiLong);
             const isPotentialShort = (rsi15m >= prof.rsiShort);
@@ -530,7 +528,7 @@ async function scanMarket() {
                 continue;
             }
 
-            // HER ŞEY MÜKEMMEL, SİNYAL OLUŞTURULUYOR
+            // HER ŞEY UYGUN, FİTİL VE L/S KONTROLÜYLE SİNYAL ÜRETİLİYOR
             const lsData = await fetchLongShortRatio(symbol);
             const atr15 = calculateATR(highs15, lows15, closes15, 14);
             const cleanSymbol = symbol.replace('USDT', '');
@@ -550,8 +548,7 @@ async function scanMarket() {
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 25 * 60 * 1000)) {
-                // Sinyal Kartına "1H Trend Yönü" satırı eklendi.
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>ADAPTİF PRO SİNYAL (Makro>Mikro)</b> 🎯\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri:</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Coin Özel Parametresi:</b>\n• Profil: ${prof.category}\n\n🧭 <b>Makro Onay Durumu:</b>\n• <b>1H Ana Trend:</b> ${mainTrend === 'BULL' ? '🟢 Boğa' : '🔴 Ayı'}\n\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>ADAPTİF PRO SİNYAL (Makro>Mikro)</b> 🎯\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri:</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Coin Özel Parametresi:</b>\n• Profil: ${prof.category}\n• Tetiklenen 15M RSI: <b>${rsi15m}</b> (Eşik: ${signal.type.includes('LONG') ? prof.rsiLong : prof.rsiShort})\n\n🧭 <b>Makro Onay Durumu:</b>\n• <b>1H Ana Trend:</b> ${mainTrend === 'BULL' ? '🟢 Boğa' : '🔴 Ayı'} (RSI: ${rsi1h})\n\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(msg);
                 alertedCoins.set(symbol, Date.now());
                 activeTrades.set(symbol, { side: signal.type.includes('LONG') ? 'LONG' : 'SHORT', entry: signal.rawEntry, sl: signal.rawSl, tp1: signal.rawTp1, tp2: signal.rawTp2, tp1Hit: false, time: Date.now() });
@@ -571,7 +568,7 @@ async function scanMarket() {
 // ==========================================
 async function runLoop() {
     console.log("🚀 ScalpPro Başlatıldı...");
-    sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Fon yöneticilerinin kullandığı 'Yukarıdan Aşağıya Analiz (Top-Down)' kurgusuna geçildi. Bot artık önce 1 Saatlik (1H) ve 4 Saatlik (4H) makro yönü denetliyor, sonrasında 15 Dakikalık (15M) RSI ile tetiği çekiyor.");
+    sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Altın Oran RSI eşikleri (Majör: 45/55, Altcoin: 40/60, Meme: 38/62) devreye alındı. Fitil (iğne ucu) koruması ve Makro > Mikro analiz sırası aktif.");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(15000); }
