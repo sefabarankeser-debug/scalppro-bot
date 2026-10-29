@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Adaptive AI + 1H Trend & PNL Simulator Active\n');
+    res.end('ScalpPro Adaptive AI + Top-Down (Macro>Micro) Engine Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -76,7 +76,6 @@ function handleTradeResult(symbol, resultType) {
             sendTelegramMessage(`🛡️ <b>${symbol} 24 Saat Karantinaya Alındı!</b>\nPeş peşe 3 stop nedeniyle parametreler sıkılaştırıldı.`);
         }
     } else if (resultType === 'TP' || resultType === 'TP2') {
-        // TP ve TP2 (Tüm hedefler) başarı sayılır
         if (resultType === 'TP2') prof.totalTps++; 
         prof.consecutiveStops = 0;
     }
@@ -88,7 +87,7 @@ function handleTradeResult(symbol, resultType) {
 let lastUpdateId = 0;
 const alertedCoins = new Map();
 const activeTrades = new Map();
-const tradeHistory = []; // { type: 'TP1'|'TP2'|'STOP', time: timestamp } eklenecek
+const tradeHistory = [];
 let lastStatusReportTime = 0;
 
 const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
@@ -110,7 +109,6 @@ function formatPrice(val, basePrice) {
     return Number(val).toFixed(decimals);
 }
 
-// PNL SİMÜLATÖRÜ FONKSİYONU
 function getPNLStatsText(hours) {
     const cutoff = Date.now() - (hours * 60 * 60 * 1000);
     const filtered = tradeHistory.filter(t => t.time >= cutoff);
@@ -122,8 +120,6 @@ function getPNLStatsText(hours) {
 
     if (totalTrades === 0) return `• <b>Son ${hours} Saat:</b> Henüz sonuçlanan işlem yok`;
 
-    // Basit Simülasyon Matematiği: Kasa $1000, Risk İşlem Başı %2 ($20).
-    // TP1 = 1.25R (+%2.5 Kasa Büyümesi) | TP2 = 2.5R (+%5 Kasa Büyümesi) | STOP = -1R (-%2 Kasa Küçülmesi)
     let simBalance = 1000;
     for (const t of filtered) {
         if (t.type === 'TP1') simBalance *= 1.025;
@@ -405,7 +401,7 @@ async function pollTelegramUpdates() {
 }
 
 // ==========================================
-// 6. FİTİL (İĞNE UCU) YAKALAMALI İŞLEM TAKİBİ & PNL KAYDI
+// 6. FİTİL (İĞNE UCU) YAKALAMALI İŞLEM TAKİBİ
 // ==========================================
 async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) {
     const trade = activeTrades.get(symbol);
@@ -419,7 +415,7 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
             trade.tp1Hit = true;
             trade.sl = trade.entry;
             tradeHistory.push({ type: 'TP1', time: Date.now() });
-            handleTradeResult(symbol, 'TP'); // Geçici TP bildirimi (Karantina sıfırlama vb. için)
+            handleTradeResult(symbol, 'TP');
             const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n💰 <b>Kazanılan Kâr:</b> +%${gainPct}\n\n🛡️ Stop <b>GİRİŞ SEVİYESİNE</b> çekildi.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
         }
@@ -431,7 +427,6 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
             activeTrades.delete(symbol); return;
         }
         if (currentLow <= trade.sl) {
-            // Eğer daha önce TP1 aldıysa bu bir "Girişte Stop" (Başabaş) çıkışıdır. PNL'i eksi yazmaz.
             if (trade.tp1Hit) {
                 await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🛡️ <b>İŞLEM GİRİŞTEN KAPANDI | #${cleanSymbol}/USDT</b>\n\nTP1 alındıktan sonra stop noktamıza giriş seviyesinde değdi. (Net Zarar Yok).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
@@ -474,7 +469,7 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
 }
 
 // ==========================================
-// 7. MULTI-TIMEFRAME (1H + 15M + 4H) TARAMA
+// 7. YUKARIDAN AŞAĞIYA (TOP-DOWN) TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -488,57 +483,75 @@ async function scanMarket() {
             const prof = getCoinProfile(symbol);
             if (prof.quarantineUntil > Date.now()) continue;
 
-            const klines15m = await fetchUniversalKlines(symbol, "15", 50);
-            await sleep(40);
-            if (!klines15m || klines15m.length < 35) continue;
-            scannedCount++;
-
-            const opens15 = klines15m.map(k => parseFloat(k[1])), highs15 = klines15m.map(k => parseFloat(k[2])), lows15 = klines15m.map(k => parseFloat(k[3])), closes15 = klines15m.map(k => parseFloat(k[4]));
-            const currentPrice = closes15[closes15.length - 1], currentOpen = opens15[opens15.length - 1], currentHigh = highs15[highs15.length - 1], currentLow = lows15[lows15.length - 1];
-
-            await checkActiveTrades(symbol, currentPrice, currentHigh, currentLow);
-
-            const rsi15m = calculateRSI(closes15, 14);
-            const isPotentialLong = (rsi15m <= prof.rsiLong), isPotentialShort = (rsi15m >= prof.rsiShort);
-            if (!isPotentialLong && !isPotentialShort) { rsiNeutralCount++; continue; }
-
-            // Ana Trend Pusulası (1 Saatlik Grafik)
+            // ADIM 1: PUSULA (1 SAATLİK ANA TREND KONTROLÜ)
             const klines1h = await fetchUniversalKlines(symbol, "60", 60);
-            await sleep(40);
+            await sleep(35);
             if (!klines1h || klines1h.length < 25) continue;
             const closes1h = klines1h.map(k => parseFloat(k[4]));
             const rsi1h = calculateRSI(closes1h, 14);
             const ema50_1h = calculateEMA(closes1h, 50) || calculateEMA(closes1h, 20);
-            let mainTrend = currentPrice > ema50_1h && rsi1h >= 48 ? "BULL" : currentPrice < ema50_1h && rsi1h <= 52 ? "BEAR" : "NEUTRAL";
+            const currentPrice1h = closes1h[closes1h.length - 1];
+            let mainTrend = currentPrice1h > ema50_1h && rsi1h >= 48 ? "BULL" : currentPrice1h < ema50_1h && rsi1h <= 52 ? "BEAR" : "NEUTRAL";
 
-            // Makro Güvenlik Filtresi ve Bilgilendirme (4 Saatlik Grafik)
+            // ADIM 2: MAKRO GÜVENLİK KAMERASI (4 SAATLİK BASKI KONTROLÜ)
             const klines4h = await fetchUniversalKlines(symbol, "240", 60);
-            await sleep(40);
+            await sleep(35);
             let candleData = { reportText: "⚠️ 4H Verisi Alınamadı", isBearDominance: false, isBullDominance: false };
             if (klines4h && klines4h.length >= 20) candleData = analyze4HCandles(klines4h);
-            
+
+            // ADIM 3: MİKRO İZLEME VE İŞLEM YÖNETİMİ (15 DAKİKALIK GRAFİK)
+            const klines15m = await fetchUniversalKlines(symbol, "15", 50);
+            await sleep(35);
+            if (!klines15m || klines15m.length < 35) continue;
+            scannedCount++;
+
+            const opens15 = klines15m.map(k => parseFloat(k[1])), highs15 = klines15m.map(k => parseFloat(k[2]));
+            const lows15 = klines15m.map(k => parseFloat(k[3])), closes15 = klines15m.map(k => parseFloat(k[4]));
+            const currentPrice = closes15[closes15.length - 1], currentOpen = opens15[opens15.length - 1];
+            const currentHigh = highs15[highs15.length - 1], currentLow = lows15[lows15.length - 1];
+
+            // Açık işlem varsa iğne uçlarıyla (15M) takip et
+            await checkActiveTrades(symbol, currentPrice, currentHigh, currentLow);
+
+            // KARAR ANI 1: Eğer Ana Yön yataysa veya 4 Saatlik Makro Yön tamamen tersiyse, 
+            // 15 Dakikalıkta fırsat bile olsa işlem açma ve Rapor için say.
+            if (mainTrend === "NEUTRAL" || (mainTrend === "BULL" && candleData.isBearDominance) || (mainTrend === "BEAR" && candleData.isBullDominance)) {
+                trendBlockedCount++;
+                continue;
+            }
+
+            // KARAR ANI 2: Makrolar ONAY verdi. Şimdi 15M RSI'da Pusu/Tetik kontrolü yap.
+            const rsi15m = calculateRSI(closes15, 14);
+            const isPotentialLong = (rsi15m <= prof.rsiLong);
+            const isPotentialShort = (rsi15m >= prof.rsiShort);
+
+            if (!isPotentialLong && !isPotentialShort) {
+                rsiNeutralCount++;
+                continue;
+            }
+
+            // HER ŞEY MÜKEMMEL, SİNYAL OLUŞTURULUYOR
             const lsData = await fetchLongShortRatio(symbol);
             const atr15 = calculateATR(highs15, lows15, closes15, 14);
             const cleanSymbol = symbol.replace('USDT', '');
             let signal = null;
 
             const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.25);
-            if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && lsData.longPct < prof.maxLsRatio && !candleData.isBearDominance) {
+            if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && lsData.longPct < prof.maxLsRatio) {
                 const stopDist = atr15 ? Math.max(atr15 * prof.atrMultiplier, currentPrice * 0.011) : currentPrice * 0.013;
-                signal = { type: "🟢 LONG", rawEntry: currentPrice, rawSl: currentPrice - stopDist, rawTp1: currentPrice + (stopDist * 1.25), rawTp2: currentPrice + (stopDist * 2.5), sl: formatPrice(currentPrice - stopDist, currentPrice), tp1: formatPrice(currentPrice + (stopDist * 1.25), currentPrice), tp2: formatPrice(currentPrice + (stopDist * 2.5), currentPrice), tp1Pct: ((((currentPrice + (stopDist * 1.25)) - currentPrice) / currentPrice) * 100).toFixed(2), reason: `1H Trend Boğa (RSI: ${rsi1h}), 15M Düzeltme (${rsi15m} <= ${prof.rsiLong})` };
+                signal = { type: "🟢 LONG", rawEntry: currentPrice, rawSl: currentPrice - stopDist, rawTp1: currentPrice + (stopDist * 1.25), rawTp2: currentPrice + (stopDist * 2.5), sl: formatPrice(currentPrice - stopDist, currentPrice), tp1: formatPrice(currentPrice + (stopDist * 1.25), currentPrice), tp2: formatPrice(currentPrice + (stopDist * 2.5), currentPrice), tp1Pct: ((((currentPrice + (stopDist * 1.25)) - currentPrice) / currentPrice) * 100).toFixed(2), reason: `1H Trend Boğa, 4H Temiz, 15M Düzeltme (${rsi15m} <= ${prof.rsiLong})` };
             }
 
             const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.25);
-            if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && lsData.shortPct < prof.maxLsRatio && !candleData.isBullDominance) {
+            if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && lsData.shortPct < prof.maxLsRatio) {
                 const stopDist = atr15 ? Math.max(atr15 * prof.atrMultiplier, currentPrice * 0.011) : currentPrice * 0.013;
-                signal = { type: "🔴 SHORT", rawEntry: currentPrice, rawSl: currentPrice + stopDist, rawTp1: currentPrice - (stopDist * 1.25), rawTp2: currentPrice - (stopDist * 2.5), sl: formatPrice(currentPrice + stopDist, currentPrice), tp1: formatPrice(currentPrice - (stopDist * 1.25), currentPrice), tp2: formatPrice(currentPrice - (stopDist * 2.5), currentPrice), tp1Pct: (((currentPrice - (currentPrice - (stopDist * 1.25))) / currentPrice) * 100).toFixed(2), reason: `1H Trend Ayı (RSI: ${rsi1h}), 15M Tepki (${rsi15m} >= ${prof.rsiShort})` };
+                signal = { type: "🔴 SHORT", rawEntry: currentPrice, rawSl: currentPrice + stopDist, rawTp1: currentPrice - (stopDist * 1.25), rawTp2: currentPrice - (stopDist * 2.5), sl: formatPrice(currentPrice + stopDist, currentPrice), tp1: formatPrice(currentPrice - (stopDist * 1.25), currentPrice), tp2: formatPrice(currentPrice - (stopDist * 2.5), currentPrice), tp1Pct: (((currentPrice - (currentPrice - (stopDist * 1.25))) / currentPrice) * 100).toFixed(2), reason: `1H Trend Ayı, 4H Temiz, 15M Tepki (${rsi15m} >= ${prof.rsiShort})` };
             }
-
-            if (!signal && (isPotentialLong || isPotentialShort)) trendBlockedCount++;
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 25 * 60 * 1000)) {
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>ADAPTİF PRO SİNYAL (1H + 15M)</b> 🎯\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri:</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Coin Özel Parametresi:</b>\n• Profil: ${prof.category}\n\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+                // Sinyal Kartına "1H Trend Yönü" satırı eklendi.
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>ADAPTİF PRO SİNYAL (Makro>Mikro)</b> 🎯\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri:</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Coin Özel Parametresi:</b>\n• Profil: ${prof.category}\n\n🧭 <b>Makro Onay Durumu:</b>\n• <b>1H Ana Trend:</b> ${mainTrend === 'BULL' ? '🟢 Boğa' : '🔴 Ayı'}\n\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(msg);
                 alertedCoins.set(symbol, Date.now());
                 activeTrades.set(symbol, { side: signal.type.includes('LONG') ? 'LONG' : 'SHORT', entry: signal.rawEntry, sl: signal.rawSl, tp1: signal.rawTp1, tp2: signal.rawTp2, tp1Hit: false, time: Date.now() });
@@ -546,9 +559,8 @@ async function scanMarket() {
             }
         }
 
-        // TAM 10 DAKİKADA BİR RAPOR
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] ÇİFT ZAMAN DİLİMİ RAPORU (1H + 15M)</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>İncelenen:</b> ${scannedCount} Parite\n⚡ <b>BTC Durumu:</b> %${btc.change15m}\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>Nötr RSI Bölgesi:</b> ${rsiNeutralCount} Parite\n• <b>1H/4H Filtre Kilidine Takılan:</b> ${trendBlockedCount} Parite\n\n${getStatsText()}\n\n⚠️ <i>"YTD" HEPSİ.</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] YUKARIDAN AŞAĞIYA (TOP-DOWN) RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>İncelenen:</b> ${scannedCount} Parite\n⚡ <b>BTC Durumu:</b> %${btc.change15m}\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>1H/4H Makro Filtreye Takılan:</b> ${trendBlockedCount} Parite\n• <b>Mikro Nötr RSI Bölgesi:</b> ${rsiNeutralCount} Parite\n\n${getStatsText()}\n\n⚠️ <i>"YTD" HEPSİ.</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -559,7 +571,7 @@ async function scanMarket() {
 // ==========================================
 async function runLoop() {
     console.log("🚀 ScalpPro Başlatıldı...");
-    sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Yeni nesil PNL (Kâr/Zarar) Simülatörü eklendi. Bot, her işlemin ardından $1000'lık sanal kasanın net büyüme oranını (% olarak) otomatik hesaplayıp Raporlara ekleyecek.");
+    sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Fon yöneticilerinin kullandığı 'Yukarıdan Aşağıya Analiz (Top-Down)' kurgusuna geçildi. Bot artık önce 1 Saatlik (1H) ve 4 Saatlik (4H) makro yönü denetliyor, sonrasında 15 Dakikalık (15M) RSI ile tetiği çekiyor.");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(15000); }
