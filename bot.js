@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Adaptive AI + 1H Trend Engine Active\n');
+    res.end('ScalpPro Adaptive AI + 1H Trend & PNL Simulator Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -75,19 +75,20 @@ function handleTradeResult(symbol, resultType) {
             prof.quarantineUntil = Date.now() + (24 * 60 * 60 * 1000);
             sendTelegramMessage(`🛡️ <b>${symbol} 24 Saat Karantinaya Alındı!</b>\nPeş peşe 3 stop nedeniyle parametreler sıkılaştırıldı.`);
         }
-    } else if (resultType === 'TP') {
-        prof.totalTps++;
+    } else if (resultType === 'TP' || resultType === 'TP2') {
+        // TP ve TP2 (Tüm hedefler) başarı sayılır
+        if (resultType === 'TP2') prof.totalTps++; 
         prof.consecutiveStops = 0;
     }
 }
 
 // ==========================================
-// 3. HAFIZA & DEĞİŞKENLER
+// 3. HAFIZA, DEĞİŞKENLER & PNL SİMÜLATÖRÜ
 // ==========================================
 let lastUpdateId = 0;
 const alertedCoins = new Map();
 const activeTrades = new Map();
-const tradeHistory = [];
+const tradeHistory = []; // { type: 'TP1'|'TP2'|'STOP', time: timestamp } eklenecek
 let lastStatusReportTime = 0;
 
 const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
@@ -109,24 +110,42 @@ function formatPrice(val, basePrice) {
     return Number(val).toFixed(decimals);
 }
 
-function getPeriodStats(hours) {
+// PNL SİMÜLATÖRÜ FONKSİYONU
+function getPNLStatsText(hours) {
     const cutoff = Date.now() - (hours * 60 * 60 * 1000);
     const filtered = tradeHistory.filter(t => t.time >= cutoff);
-    const tps = filtered.filter(t => t.type === 'TP').length;
-    const stops = filtered.filter(t => t.type === 'STOP').length;
-    const total = tps + stops;
-    const winRate = total > 0 ? ((tps / total) * 100).toFixed(1) : "0.0";
-    return { tps, stops, total, winRate };
+    
+    const tp1Count = filtered.filter(t => t.type === 'TP1').length;
+    const tp2Count = filtered.filter(t => t.type === 'TP2').length;
+    const stopCount = filtered.filter(t => t.type === 'STOP').length;
+    const totalTrades = tp1Count + tp2Count + stopCount;
+
+    if (totalTrades === 0) return `• <b>Son ${hours} Saat:</b> Henüz sonuçlanan işlem yok`;
+
+    // Basit Simülasyon Matematiği: Kasa $1000, Risk İşlem Başı %2 ($20).
+    // TP1 = 1.25R (+%2.5 Kasa Büyümesi) | TP2 = 2.5R (+%5 Kasa Büyümesi) | STOP = -1R (-%2 Kasa Küçülmesi)
+    let simBalance = 1000;
+    for (const t of filtered) {
+        if (t.type === 'TP1') simBalance *= 1.025;
+        else if (t.type === 'TP2') simBalance *= 1.050;
+        else if (t.type === 'STOP') simBalance *= 0.980;
+    }
+    
+    const netGainPct = (((simBalance - 1000) / 1000) * 100).toFixed(2);
+    const sign = netGainPct >= 0 ? "+" : "";
+    const colorIcon = netGainPct >= 0 ? "🟢" : "🔴";
+    const totalWinRate = (((tp1Count + tp2Count) / totalTrades) * 100).toFixed(1);
+
+    return `• <b>Son ${hours} Saat:</b> ${tp1Count} TP1 | ${tp2Count} TP2 | ${stopCount} Stop (%${totalWinRate} Win Rate)\n  ↳ ${colorIcon} <b>Simüle Kasa ($1000):</b> $${simBalance.toFixed(2)} (<b>${sign}%${netGainPct} PNL</b>)`;
 }
 
 function getStatsText() {
     const twelveHoursAgo = Date.now() - (12 * 60 * 60 * 1000);
     while (tradeHistory.length > 0 && tradeHistory[0].time < twelveHoursAgo) tradeHistory.shift();
-    const s1 = getPeriodStats(1);
-    const s12 = getPeriodStats(12);
-    let text1 = s1.total > 0 ? `• ⚡ <b>Son 1 Saat:</b> ${s1.tps} TP | ${s1.stops} Stop (<b>%${s1.winRate} Win Rate</b>)` : `• ⚡ <b>Son 1 Saat:</b> İşlem yok`;
-    let text12 = s12.total > 0 ? `• 🌐 <b>Son 12 Saat:</b> ${s12.tps} TP | ${s12.stops} Stop (<b>%${s12.winRate} Win Rate</b>)` : `• 🌐 <b>Son 12 Saat:</b> Henüz sonuçlanan işlem yok`;
-    return `📊 <b>Canlı Başarı Karnesi (1H Trend + 15M):</b>\n${text1}\n${text12}`;
+    
+    const text1 = getPNLStatsText(1);
+    const text12 = getPNLStatsText(12);
+    return `📊 <b>Canlı Başarı & PNL Simülasyonu:</b>\n${text1}\n${text12}`;
 }
 
 function getActiveSessionName() {
@@ -386,7 +405,7 @@ async function pollTelegramUpdates() {
 }
 
 // ==========================================
-// 6. FİTİL (İĞNE UCU) YAKALAMALI İŞLEM TAKİBİ
+// 6. FİTİL (İĞNE UCU) YAKALAMALI İŞLEM TAKİBİ & PNL KAYDI
 // ==========================================
 async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) {
     const trade = activeTrades.get(symbol);
@@ -399,22 +418,27 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
         if (!trade.tp1Hit && currentHigh >= trade.tp1) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
-            tradeHistory.push({ type: 'TP', time: Date.now() });
-            handleTradeResult(symbol, 'TP');
+            tradeHistory.push({ type: 'TP1', time: Date.now() });
+            handleTradeResult(symbol, 'TP'); // Geçici TP bildirimi (Karantina sıfırlama vb. için)
             const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n💰 <b>Kazanılan Kâr:</b> +%${gainPct}\n\n🛡️ Stop <b>GİRİŞ SEVİYESİNE</b> çekildi.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
         }
         if (currentHigh >= trade.tp2) {
-            tradeHistory.push({ type: 'TP', time: Date.now() });
-            handleTradeResult(symbol, 'TP');
+            tradeHistory.push({ type: 'TP2', time: Date.now() });
+            handleTradeResult(symbol, 'TP2');
             const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n🚀 <b>Net Kazanç:</b> +%${gainPct}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             activeTrades.delete(symbol); return;
         }
         if (currentLow <= trade.sl) {
-            tradeHistory.push({ type: 'STOP', time: Date.now() });
-            handleTradeResult(symbol, 'STOP');
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            // Eğer daha önce TP1 aldıysa bu bir "Girişte Stop" (Başabaş) çıkışıdır. PNL'i eksi yazmaz.
+            if (trade.tp1Hit) {
+                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🛡️ <b>İŞLEM GİRİŞTEN KAPANDI | #${cleanSymbol}/USDT</b>\n\nTP1 alındıktan sonra stop noktamıza giriş seviyesinde değdi. (Net Zarar Yok).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            } else {
+                tradeHistory.push({ type: 'STOP', time: Date.now() });
+                handleTradeResult(symbol, 'STOP');
+                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            }
             activeTrades.delete(symbol); return;
         }
     }
@@ -423,22 +447,26 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
         if (!trade.tp1Hit && currentLow <= trade.tp1) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
-            tradeHistory.push({ type: 'TP', time: Date.now() });
+            tradeHistory.push({ type: 'TP1', time: Date.now() });
             handleTradeResult(symbol, 'TP');
             const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n💰 <b>Kazanılan Kâr:</b> +%${gainPct}\n\n🛡️ Stop <b>GİRİŞ SEVİYESİNE</b> çekildi.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
         }
         if (currentLow <= trade.tp2) {
-            tradeHistory.push({ type: 'TP', time: Date.now() });
-            handleTradeResult(symbol, 'TP');
+            tradeHistory.push({ type: 'TP2', time: Date.now() });
+            handleTradeResult(symbol, 'TP2');
             const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n🚀 <b>Net Kazanç:</b> +%${gainPct}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             activeTrades.delete(symbol); return;
         }
         if (currentHigh >= trade.sl) {
-            tradeHistory.push({ type: 'STOP', time: Date.now() });
-            handleTradeResult(symbol, 'STOP');
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            if (trade.tp1Hit) {
+                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🛡️ <b>İŞLEM GİRİŞTEN KAPANDI | #${cleanSymbol}/USDT</b>\n\nTP1 alındıktan sonra stop noktamıza giriş seviyesinde değdi. (Net Zarar Yok).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            } else {
+                tradeHistory.push({ type: 'STOP', time: Date.now() });
+                handleTradeResult(symbol, 'STOP');
+                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            }
             activeTrades.delete(symbol); return;
         }
     }
@@ -494,14 +522,12 @@ async function scanMarket() {
             const cleanSymbol = symbol.replace('USDT', '');
             let signal = null;
 
-            // LONG Tetiği: 1H Trend Boğa İSE ve 4H'ta devasa bir Ayı çöküşü YOKSA
             const hasLowerWick = (Math.min(currentOpen, currentPrice) - currentLow) >= (Math.abs(currentPrice - currentOpen) * 0.25);
             if (isPotentialLong && mainTrend === "BULL" && hasLowerWick && btc.btcTrend !== "DUMP" && lsData.longPct < prof.maxLsRatio && !candleData.isBearDominance) {
                 const stopDist = atr15 ? Math.max(atr15 * prof.atrMultiplier, currentPrice * 0.011) : currentPrice * 0.013;
                 signal = { type: "🟢 LONG", rawEntry: currentPrice, rawSl: currentPrice - stopDist, rawTp1: currentPrice + (stopDist * 1.25), rawTp2: currentPrice + (stopDist * 2.5), sl: formatPrice(currentPrice - stopDist, currentPrice), tp1: formatPrice(currentPrice + (stopDist * 1.25), currentPrice), tp2: formatPrice(currentPrice + (stopDist * 2.5), currentPrice), tp1Pct: ((((currentPrice + (stopDist * 1.25)) - currentPrice) / currentPrice) * 100).toFixed(2), reason: `1H Trend Boğa (RSI: ${rsi1h}), 15M Düzeltme (${rsi15m} <= ${prof.rsiLong})` };
             }
 
-            // SHORT Tetiği: 1H Trend Ayı İSE ve 4H'ta devasa bir Boğa rallisi YOKSA
             const hasUpperWick = (currentHigh - Math.max(currentOpen, currentPrice)) >= (Math.abs(currentPrice - currentOpen) * 0.25);
             if (isPotentialShort && mainTrend === "BEAR" && hasUpperWick && btc.btcTrend !== "PUMP" && lsData.shortPct < prof.maxLsRatio && !candleData.isBullDominance) {
                 const stopDist = atr15 ? Math.max(atr15 * prof.atrMultiplier, currentPrice * 0.011) : currentPrice * 0.013;
@@ -533,7 +559,7 @@ async function scanMarket() {
 // ==========================================
 async function runLoop() {
     console.log("🚀 ScalpPro Başlatıldı...");
-    sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Ana trend 1 Saatlik (1H) grafiğe çekildi. Hızlandırılmış Scalp modu devrede, 4 Saatlik grafik (4H) bilgi ekranı olarak bırakıldı.");
+    sendTelegramMessage("🤖 <b>Sistem Güncellendi:</b> Yeni nesil PNL (Kâr/Zarar) Simülatörü eklendi. Bot, her işlemin ardından $1000'lık sanal kasanın net büyüme oranını (% olarak) otomatik hesaplayıp Raporlara ekleyecek.");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(15000); }
