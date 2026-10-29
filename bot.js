@@ -15,7 +15,7 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Expanded Sepet + Stoch RSI Active\n');
+    res.end('ScalpPro Full PNL Tracking + Stoch RSI Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -44,7 +44,7 @@ const COIN_ASSIGNMENTS = {
     "1000FLOKIUSDT": "MEME", "1000BONKUSDT": "MEME", "NEIROUSDT": "MEME", "NOTUSDT": "MEME",
     "POPCATUSDT": "MEME", "BOMEUSDT": "MEME",
     
-    // Oynak ve Popüler Altcoinler (Yeni eklenenler dahil)
+    // Oynak ve Popüler Altcoinler
     "DYMUSDT": "VOLATILE_ALT", "STRKUSDT": "VOLATILE_ALT", "WLDUSDT": "VOLATILE_ALT",
     "SUIUSDT": "VOLATILE_ALT", "APTUSDT": "VOLATILE_ALT", "TAOUSDT": "VOLATILE_ALT",
     "FETUSDT": "VOLATILE_ALT", "SEIUSDT": "VOLATILE_ALT", "ARKMUSDT": "VOLATILE_ALT",
@@ -57,7 +57,6 @@ const COIN_ASSIGNMENTS = {
     "DYDXUSDT": "VOLATILE_ALT", "GMXUSDT": "VOLATILE_ALT", "FTMUSDT": "VOLATILE_ALT",
     "SANDUSDT": "VOLATILE_ALT", "MANAUSDT": "VOLATILE_ALT", "THETAUSDT": "VOLATILE_ALT",
     "ZROUSDT": "VOLATILE_ALT", "PYTHUSDT": "VOLATILE_ALT", "WUSDT": "VOLATILE_ALT",
-    // Yeni Eklenen Güçlü Pariteler
     "POLUSDT": "VOLATILE_ALT", "HBARUSDT": "VOLATILE_ALT", "SANTOSUSDT": "VOLATILE_ALT",
     "OMUSDT": "VOLATILE_ALT", "IMXUSDT": "VOLATILE_ALT", "AXSUSDT": "VOLATILE_ALT",
     "CHZUSDT": "VOLATILE_ALT", "GMTUSDT": "VOLATILE_ALT", "ICPUSDT": "MAJOR",
@@ -549,7 +548,7 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
 }
 
 // ==========================================
-// 7. TOP-DOWN TARAMA MOTORU (GENİŞLETİLMİŞ SEPET)
+// 7. TOP-DOWN TARAMA MOTORU (PNL DAHİL)
 // ==========================================
 async function scanMarket() {
     try {
@@ -630,7 +629,7 @@ async function scanMarket() {
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 25 * 60 * 1000)) {
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>STOCH RSI PRO SİNYAL</b> 🎯\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri:</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Coin Özel Parametresi:</b>\n• Profil: ${prof.category}\n• Tetiklenen Stoch: <b>%K: ${stoch15m.k} | %D: ${stoch15m.d}</b>\n\n🧭 <b>Makro Onay Durumu:</b>\n• <b>1H Ana Trend:</b> ${mainTrend === 'BULL' ? '🟢 Boğa' : '🔴 Ayı'} (RSI: ${rsi1h})\n• <b>1H Şelale Koruma:</b> Aktif (Şelale Yok ✅)\n\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>STOCH RSI PRO SİNYAL</b> 🎯\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri:</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Coin Özel Parametresi:</b>\n• Profil: ${prof.category}\n• Tetiklenen Stoch: <b>%K: ${stoch15m.k} | %D: ${stoch15m.d}</b>\n\n🧭 <b>Makro Onay Durumu:</b>\n• <b>1H Ana Trend:</b> ${mainTrend === 'BULL' ? '🟢 Boğa' : '🔴 Ayı'} (RSI: ${rsi1h})\n• <b>1H Şelale Koruma:</b> Aktif (Şelale Yok ✅)\n\n${lsData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(msg);
                 alertedCoins.set(symbol, Date.now());
                 activeTrades.set(symbol, { side: signal.type.includes('LONG') ? 'LONG' : 'SHORT', entry: signal.rawEntry, sl: signal.rawSl, tp1: signal.rawTp1, tp2: signal.rawTp2, tp1Hit: false, time: Date.now() });
@@ -649,8 +648,8 @@ async function scanMarket() {
 // 8. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Genişletilmiş Sepet Başlatıldı...");
-    sendTelegramMessage("🌐 <b>Sistem Güncellendi:</b> Sepet genişletildi! Majörler, meme coinler ve güçlü hacimli altcoinlerle birlikte toplam <b>70+ parite</b> Stoch RSI motoruyla taranmaya başlandı.");
+    console.log("🚀 ScalpPro Tam Sürüm Başlatıldı...");
+    sendTelegramMessage("🌐 <b>Sistem Güncellendi:</b> Genişletilmiş 70+ parite sepeti, Stoch RSI motoru ve <b>$1000 PNL Simülasyon Takibi</b> aktif!");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(15000); }
