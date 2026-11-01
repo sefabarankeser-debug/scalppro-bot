@@ -8,6 +8,8 @@ process.on('unhandledRejection', (reason) => {
 
 const http = require('http');
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
 
 // ==========================================
 // 1. RENDER PORT & SABİT TELEGRAM BİLGİLERİ
@@ -15,13 +17,17 @@ const https = require('https');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Turbo + Stoch Crossover + Optimized 87 Coins Active\n');
+    res.end('ScalpPro Ultimate (87 Coins + Volume + Funding + Trailing + Permanent Wallet) Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
 
 const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = "-1004412694884";
+
+// Eşzamanlı Maksimum Açık İşlem Sınırları (Toplu Stop Kalkanı)
+const MAX_TOTAL_ACTIVE_TRADES = 6;
+const MAX_SAME_SIDE_TRADES = 4;
 
 // ==========================================
 // 2. ADAPTİF PROFİLLER VE SEÇİCİ SEPET (87 PARİTE)
@@ -33,19 +39,19 @@ const BASE_PROFILES = {
 };
 
 const COIN_ASSIGNMENTS = {
-    // Majörler ve Yüksek Hacimli Temeller
+    // Majörler ve Yüksek Hacimli Temeller (20 Adet)
     "BTCUSDT": "MAJOR", "ETHUSDT": "MAJOR", "SOLUSDT": "MAJOR", "AVAXUSDT": "MAJOR", 
     "NEARUSDT": "MAJOR", "LINKUSDT": "MAJOR", "UNIUSDT": "MAJOR", "LTCUSDT": "MAJOR", 
     "BCHUSDT": "MAJOR", "ETCUSDT": "MAJOR", "ATOMUSDT": "MAJOR", "FILUSDT": "MAJOR", 
     "ALGOUSDT": "MAJOR", "XRPUSDT": "MAJOR", "ADAUSDT": "MAJOR", "BNBUSDT": "MAJOR", 
     "ICPUSDT": "MAJOR", "TRXUSDT": "MAJOR", "HYPEUSDT": "MAJOR", "ZECUSDT": "MAJOR",
     
-    // Meme Coinler
+    // Meme Coinler (10 Adet)
     "DOGEUSDT": "MEME", "1000PEPEUSDT": "MEME", "WIFUSDT": "MEME", "1000SHIBUSDT": "MEME",
     "1000FLOKIUSDT": "MEME", "1000BONKUSDT": "MEME", "NEIROUSDT": "MEME", "NOTUSDT": "MEME",
     "POPCATUSDT": "MEME", "BOMEUSDT": "MEME",
     
-    // Oynak ve Stoch RSI Uyumlu Popüler Altcoinler
+    // Oynak ve Stoch RSI Uyumlu Popüler Altcoinler (57 Adet)
     "DYMUSDT": "VOLATILE_ALT", "STRKUSDT": "VOLATILE_ALT", "WLDUSDT": "VOLATILE_ALT",
     "SUIUSDT": "VOLATILE_ALT", "APTUSDT": "VOLATILE_ALT", "TAOUSDT": "VOLATILE_ALT",
     "FETUSDT": "VOLATILE_ALT", "SEIUSDT": "VOLATILE_ALT", "ARKMUSDT": "VOLATILE_ALT",
@@ -96,13 +102,45 @@ function handleTradeResult(symbol, resultType) {
 }
 
 // ==========================================
-// 3. HAFIZA, DEĞİŞKENLER & PNL SİMÜLATÖRÜ
+// 3. KALICI KASA SİSTEMİ (ASLA OTOMATİK SIFIRLANMAZ)
 // ==========================================
+const WALLET_FILE = path.join(__dirname, 'kasa_yedek.json');
 let lastUpdateId = 0;
 const alertedCoins = new Map();
 const activeTrades = new Map();
-const tradeHistory = [];
+let tradeHistory = [];
+let walletStartTime = Date.now();
 let lastStatusReportTime = 0;
+
+function loadWalletState() {
+    try {
+        if (fs.existsSync(WALLET_FILE)) {
+            const raw = fs.readFileSync(WALLET_FILE, 'utf8');
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed.tradeHistory)) tradeHistory = parsed.tradeHistory;
+            if (parsed.walletStartTime) walletStartTime = parsed.walletStartTime;
+        }
+    } catch (e) {}
+}
+
+function saveWalletState() {
+    try {
+        fs.writeFileSync(WALLET_FILE, JSON.stringify({ walletStartTime, tradeHistory }), 'utf8');
+    } catch (e) {}
+}
+
+function recordTradeEvent(type, symbol = '') {
+    tradeHistory.push({ type, symbol, time: Date.now() });
+    saveWalletState();
+}
+
+function resetPermanentWallet() {
+    tradeHistory = [];
+    walletStartTime = Date.now();
+    saveWalletState();
+}
+
+loadWalletState();
 
 const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
 const FUZZY_MAP = {
@@ -116,6 +154,10 @@ function getTurkishTimeString() {
     return new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul' });
 }
 
+function getTurkishDateTimeString(ts) {
+    return new Date(ts).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
+}
+
 function formatPrice(val, basePrice) {
     if (!val || isNaN(val)) return "0.00";
     const ref = basePrice || val;
@@ -123,39 +165,41 @@ function formatPrice(val, basePrice) {
     return Number(val).toFixed(decimals);
 }
 
-function getPNLStatsText(hours) {
+function getWindowCountsText(hours) {
     const cutoff = Date.now() - (hours * 60 * 60 * 1000);
     const filtered = tradeHistory.filter(t => t.time >= cutoff);
-    
     const tp1Count = filtered.filter(t => t.type === 'TP1').length;
     const tp2Count = filtered.filter(t => t.type === 'TP2').length;
     const stopCount = filtered.filter(t => t.type === 'STOP').length;
+    const total = tp1Count + tp2Count + stopCount;
+    if (total === 0) return `• <b>Son ${hours} Saat:</b> Henüz sonuçlanan işlem yok`;
+    const winRate = (((tp1Count + tp2Count) / total) * 100).toFixed(1);
+    return `• <b>Son ${hours} Saat:</b> ${tp1Count} TP1 | ${tp2Count} TP2 | ${stopCount} Stop (%${winRate} Win Rate)`;
+}
+
+// KALICI KASA HESAPLAMASI (Komut verilmedikçe asla sıfırlanmaz!)
+function getStatsText() {
+    const tp1Count = tradeHistory.filter(t => t.type === 'TP1').length;
+    const tp2Count = tradeHistory.filter(t => t.type === 'TP2').length;
+    const stopCount = tradeHistory.filter(t => t.type === 'STOP').length;
     const totalTrades = tp1Count + tp2Count + stopCount;
 
-    if (totalTrades === 0) return `• <b>Son ${hours} Saat:</b> Henüz sonuçlanan işlem yok`;
-
     let simBalance = 1000;
-    for (const t of filtered) {
+    for (const t of tradeHistory) {
         if (t.type === 'TP1') simBalance *= 1.025;
         else if (t.type === 'TP2') simBalance *= 1.050;
         else if (t.type === 'STOP') simBalance *= 0.980;
     }
-    
+
     const netGainPct = (((simBalance - 1000) / 1000) * 100).toFixed(2);
     const sign = netGainPct >= 0 ? "+" : "";
     const colorIcon = netGainPct >= 0 ? "🟢" : "🔴";
-    const totalWinRate = (((tp1Count + tp2Count) / totalTrades) * 100).toFixed(1);
+    const totalWinRate = totalTrades > 0 ? (((tp1Count + tp2Count) / totalTrades) * 100).toFixed(1) : "0.0";
 
-    return `• <b>Son ${hours} Saat:</b> ${tp1Count} TP1 | ${tp2Count} TP2 | ${stopCount} Stop (%${totalWinRate} Win Rate)\n  ↳ ${colorIcon} <b>Simüle Kasa ($1000):</b> $${simBalance.toFixed(2)} (<b>${sign}%${netGainPct} PNL</b>)`;
-}
+    const text1 = getWindowCountsText(1);
+    const text12 = getWindowCountsText(12);
 
-function getStatsText() {
-    const twelveHoursAgo = Date.now() - (12 * 60 * 60 * 1000);
-    while (tradeHistory.length > 0 && tradeHistory[0].time < twelveHoursAgo) tradeHistory.shift();
-    
-    const text1 = getPNLStatsText(1);
-    const text12 = getPNLStatsText(12);
-    return `📊 <b>Canlı Başarı & PNL Simülasyonu:</b>\n${text1}\n${text12}`;
+    return `📊 <b>Canlı Başarı & Kalıcı Kasa Simülasyonu:</b>\n${text1}\n${text12}\n• <b>Toplam Genel:</b> ${tp1Count} TP1 | ${tp2Count} TP2 | ${stopCount} Stop (%${totalWinRate} Win Rate)\n  ↳ ${colorIcon} <b>Kalıcı Simüle Kasa ($1000):</b> $${simBalance.toFixed(2)} (<b>${sign}%${netGainPct} PNL</b>)`;
 }
 
 function getActiveSessionName() {
@@ -224,6 +268,53 @@ async function fetchLongShortRatio(symbol) {
         }
     } catch (e) {}
     return { longPct: 50, shortPct: 50, text: `⚖️ <b>Long / Short Dağılımı:</b>\n[██████████░░░░░░░░░░]\n%50 Long | %50 Short (Dengeli Dağılım)` };
+}
+
+// YENİ: Fonlama Oranı (Funding Rate) Kontrolü
+async function fetchFundingRate(symbol) {
+    try {
+        const url = `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`;
+        const json = await fetchJSON(url);
+        if (json.retCode === 0 && json.result?.list?.length > 0) {
+            const rateRaw = parseFloat(json.result.list[0].fundingRate || "0");
+            const ratePct = rateRaw * 100;
+            const blockLong = ratePct >= 0.06;
+            const blockShort = ratePct <= -0.06;
+            let status = blockLong ? "⚠️ Aşırı Pozitif (Long Riskli)" : blockShort ? "⚠️ Aşırı Negatif (Short Riskli)" : "Normal / Sağlıklı ✅";
+            return { ratePct, blockLong, blockShort, text: `${ratePct >= 0 ? "+" : ""}%${ratePct.toFixed(4)} (${status})` };
+        }
+    } catch (e) {}
+    try {
+        const bData = await fetchJSON(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`);
+        if (bData && bData.lastFundingRate !== undefined) {
+            const ratePct = parseFloat(bData.lastFundingRate) * 100;
+            const blockLong = ratePct >= 0.06;
+            const blockShort = ratePct <= -0.06;
+            let status = blockLong ? "⚠️ Aşırı Pozitif (Long Riskli)" : blockShort ? "⚠️ Aşırı Negatif (Short Riskli)" : "Normal / Sağlıklı ✅";
+            return { ratePct, blockLong, blockShort, text: `${ratePct >= 0 ? "+" : ""}%${ratePct.toFixed(4)} (${status})` };
+        }
+    } catch (e) {}
+    return { ratePct: 0.01, blockLong: false, blockShort: false, text: `+%0.0100 (Normal ✅)` };
+}
+
+// YENİ: 15M Hacim (Volume) Patlaması ve Ölü Hacim Analizi
+function analyze15MVolume(klines15m) {
+    if (!klines15m || klines15m.length < 22) return { isAlive: true, isSpike: false, ratio: 1.0, badge: "Normal Hacim ✅" };
+    const volumes = klines15m.map(k => parseFloat(k[5] || 0));
+    const prev20 = volumes.slice(-22, -2);
+    const avgVol = prev20.reduce((a, b) => a + b, 0) / prev20.length;
+    if (avgVol <= 0) return { isAlive: true, isSpike: false, ratio: 1.0, badge: "Normal Hacim ✅" };
+
+    const curVol = volumes[volumes.length - 1];
+    const prevClosedVol = volumes[volumes.length - 2];
+    const effectiveVol = Math.max(curVol, prevClosedVol);
+    const ratio = effectiveVol / avgVol;
+
+    const isAlive = ratio >= 0.65;
+    const isSpike = ratio >= 1.25;
+    const badge = isSpike ? `🔥 Yüksek Hacim / Balina Girişi (${ratio.toFixed(1)}x)` : isAlive ? `Canlı Hacim ✅ (${ratio.toFixed(1)}x)` : `⚠️ Cılız / Ölü Hacim (${ratio.toFixed(1)}x)`;
+
+    return { isAlive, isSpike, ratio, badge };
 }
 
 function analyze4HCandles(klines4h) {
@@ -380,8 +471,50 @@ async function checkBtcCondition() {
 }
 
 // ==========================================
-// 5. ON-DEMAND VE ÖZEL TARAMA MOTORLARI
+// 5. CANLI TELEGRAM KOMUTLARI VE ÖZEL ANALİZ
 // ==========================================
+async function sendOpenTradesReport(replyToId = null) {
+    if (activeTrades.size === 0) {
+        return sendTelegramMessage(`📂 <b>AÇIK İŞLEMLER RAPORU</b>\n\nŞu anda takip edilen açık işlem bulunmuyor. (Limit: Maks ${MAX_TOTAL_ACTIVE_TRADES} işlem)`, replyToId);
+    }
+    let lines = [`📂 <b>AKTİF AÇIK İŞLEMLER (${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES})</b>\n`];
+    for (const [sym, t] of activeTrades.entries()) {
+        const clean = sym.replace('USDT', '');
+        const mins = Math.round((Date.now() - t.time) / 60000);
+        const statusBadge = t.trailingHit ? "🔒 TP1 Kârı Kilitli (Stop=TP1)" : t.tp1Hit ? "✅ TP1 Alındı (Stop=Giriş)" : "⏳ Hedef Bekleniyor";
+        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | Giriş: $${formatPrice(t.entry, t.entry)} | Stop: $${formatPrice(t.sl, t.entry)} | ${statusBadge} (${mins} dk)`);
+    }
+    await sendTelegramMessage(lines.join('\n'), replyToId);
+}
+
+async function sendQuarantineReport(replyToId = null) {
+    const quarantined = [];
+    const risky = [];
+    for (const [sym, prof] of dynamicCoinMemory.entries()) {
+        const clean = sym.replace('USDT', '');
+        if (prof.quarantineUntil > Date.now()) {
+            const remHours = ((prof.quarantineUntil - Date.now()) / (3600 * 1000)).toFixed(1);
+            quarantined.push(`• 🚫 <b>#${clean}:</b> Karantinada (${remHours} saat kaldı)`);
+        } else if (prof.consecutiveStops > 0) {
+            risky.push(`• ⚠️ <b>#${clean}:</b> Peş peşe ${prof.consecutiveStops} Stop (Eşik: ${prof.stochLong}/${prof.stochShort})`);
+        }
+    }
+    let text = `🛡️ <b>KARANTİNA VE RİSK DURUMU</b>\n\n`;
+    if (quarantined.length === 0 && risky.length === 0) {
+        text += `✅ Şu an karantinada veya ceza sınırında hiçbir parite yok. Tüm 87 parite tam kapasite taranıyor.`;
+    } else {
+        if (quarantined.length > 0) text += `<b>Karantinadaki Pariteler:</b>\n${quarantined.join('\n')}\n\n`;
+        if (risky.length > 0) text += `<b>Sıkılaştırılmış (Dikkat İzlenen) Pariteler:</b>\n${risky.join('\n')}`;
+    }
+    await sendTelegramMessage(text, replyToId);
+}
+
+async function sendWalletReport(replyToId = null) {
+    const startStr = getTurkishDateTimeString(walletStartTime);
+    const msg = `💰 <b>KALICI SİMÜLE KASA RAPORU</b>\n\n🗓️ <b>Kasa Başlangıç Tarihi:</b> ${startStr}\n📂 <b>Anlık Açık İşlem:</b> ${activeTrades.size} / ${MAX_TOTAL_ACTIVE_TRADES}\n\n${getStatsText()}\n\n💡 <i>Not: Kasa kendi kendine asla sıfırlanmaz. Sıfırlamak için <b>/sifirla</b> yazabilirsiniz.</i>`;
+    await sendTelegramMessage(msg, replyToId);
+}
+
 async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     let clean = rawSymbol.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (FUZZY_MAP[clean]) clean = FUZZY_MAP[clean];
@@ -401,6 +534,8 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     const closes15 = klines15m.map(k => parseFloat(k[4]));
     const currentPrice = closes15[closes15.length - 1];
     const stoch15m = calculateStochRSI(closes15);
+    const volData = analyze15MVolume(klines15m);
+    const fundingData = await fetchFundingRate(symbol);
     
     let rsi1h = "N/A", ema50_1h = null;
     let mom1h = { isWaterfall: false, isRocket: false, curChange: "0.00", prevChange: "0.00" };
@@ -426,10 +561,11 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     else if (candleData.isBullDominance) verdict = "🚀 4H Boğa Baskısı Mevcut (Short Filtrelendi)";
     else if (mom1h.isWaterfall) verdict = `🩸 1H Şelale Koruması (Long Engellendi)`;
     else if (mom1h.isRocket) verdict = `🚀 1H Füze Koruması (Short Engellendi)`;
-    else if (stoch15m.k <= prof.stochLong && stoch15m.bullCross && isBull1H) verdict = `🟢 ONAYLI LONG Fırsatı (Kesişim + Dip)`;
-    else if (stoch15m.k >= prof.stochShort && stoch15m.bearCross && isBear1H) verdict = `🔴 ONAYLI SHORT Fırsatı (Kesişim + Tepe)`;
+    else if (!volData.isAlive) verdict = `🔇 Hacim Yetersiz / Cılız (${volData.ratio.toFixed(1)}x)`;
+    else if (stoch15m.k <= prof.stochLong && stoch15m.bullCross && isBull1H && !fundingData.blockLong) verdict = `🟢 ONAYLI LONG Fırsatı (Kesişim + Hacim + Dip)`;
+    else if (stoch15m.k >= prof.stochShort && stoch15m.bearCross && isBear1H && !fundingData.blockShort) verdict = `🔴 ONAYLI SHORT Fırsatı (Kesişim + Hacim + Tepe)`;
 
-    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Ana Trend:</b> ${trendText} (RSI: ${rsi1h})\n⚡ <b>15M Stoch RSI:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d}\n🔀 <b>Kesişim Durumu:</b> ${crossText}\n🎯 <b>Sistem Değerlendirmesi:</b> <b>${verdict}</b>\n\n⚙️ <b>Profil:</b> ${prof.category}\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Ana Trend:</b> ${trendText} (RSI: ${rsi1h})\n⚡ <b>15M Stoch RSI:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d}\n🔀 <b>Kesişim Durumu:</b> ${crossText}\n📊 <b>15M Hacim Durumu:</b> ${volData.badge}\n💸 <b>Fonlama (Funding):</b> ${fundingData.text}\n🎯 <b>Sistem Değerlendirmesi:</b> <b>${verdict}</b>\n\n⚙️ <b>Profil:</b> ${prof.category}\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
@@ -479,8 +615,21 @@ async function pollTelegramUpdates() {
                 let txt = message.text.trim();
                 let lowerTxt = txt.toLowerCase();
 
+                // Canlı Kontrol Komutları
                 if (lowerTxt === 'dip' || lowerTxt === '/dip') { await scanExtremes('DIP', message.message_id); continue; }
                 if (lowerTxt === 'tepe' || lowerTxt === '/tepe') { await scanExtremes('TEPE', message.message_id); continue; }
+                if (lowerTxt === 'acik' || lowerTxt === '/acik' || lowerTxt === 'açık' || lowerTxt === '/açık') { await sendOpenTradesReport(message.message_id); continue; }
+                if (lowerTxt === 'kasa' || lowerTxt === '/kasa') { await sendWalletReport(message.message_id); continue; }
+                if (lowerTxt === 'karantina' || lowerTxt === '/karantina') { await sendQuarantineReport(message.message_id); continue; }
+                if (lowerTxt === 'sifirla' || lowerTxt === '/sifirla' || lowerTxt === 'sıfırla' || lowerTxt === '/sıfırla') {
+                    resetPermanentWallet();
+                    await sendTelegramMessage(`🔄 <b>SİMÜLE KASA KOMUTUNUZLA SIFIRLANDI!</b>\n\nTüm geçmiş işlem istatistikleri temizlendi ve kalıcı kasa <b>$1000.00</b> olarak yeniden başlatıldı.\n⏱ <b>${getTurkishTimeString()}</b>`, message.message_id);
+                    continue;
+                }
+                if (lowerTxt === 'yardim' || lowerTxt === '/yardim' || lowerTxt === 'komutlar' || lowerTxt === '/komutlar') {
+                    await sendTelegramMessage(`🤖 <b>SCALPPRO CANLI KOMUT LİSTESİ:</b>\n\n• <b>/kasa</b> : Kalıcı $1000 PNL kasasını ve genel durumu gösterir.\n• <b>/acik</b> : Şu an açık olan işlemleri ve stop yerlerini listeler.\n• <b>/karantina</b> : Cezalı veya dikkat izlenen coinleri gösterir.\n• <b>/sifirla</b> : $1000 simüle kasayı sıfırlayıp baştan başlatır.\n• <b>/dip</b> veya <b>/tepe</b> : Stoch RSI dip/tepe coinleri tarar.\n• <b>Coin Adı (Örn: sol, btc, /analiz doge)</b> : O coinin röntgenini çeker.`, message.message_id);
+                    continue;
+                }
 
                 let targetCoin = null;
                 if (txt.startsWith('/analiz')) targetCoin = txt.split(' ')[1];
@@ -499,7 +648,7 @@ async function pollTelegramUpdates() {
 }
 
 // ==========================================
-// 6. İŞLEM TAKİBİ
+// 6. İŞLEM TAKİBİ & KADEMELİ İZ SÜREN STOP (TRAILING STOP)
 // ==========================================
 async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) {
     const trade = activeTrades.get(symbol);
@@ -509,26 +658,41 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
     const nowTime = getTurkishTimeString();
 
     if (trade.side === 'LONG') {
+        // 1. Aşama: TP1 Geldiğinde Stop Girişe Çekilir
         if (!trade.tp1Hit && currentHigh >= trade.tp1) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
-            tradeHistory.push({ type: 'TP1', time: Date.now() });
+            recordTradeEvent('TP1', symbol);
             handleTradeResult(symbol, 'TP');
             const gainPct = (((trade.tp1 - trade.entry) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n💵 <b>Giriş:</b> $${formatPrice(trade.entry, trade.entry)}\n🎯 <b>TP1 Fiyatı:</b> $${formatPrice(trade.tp1, trade.entry)}\n💰 <b>Kazanılan Kâr:</b> +%${gainPct}\n\n🛡️ Stop <b>GİRİŞ SEVİYESİNE</b> çekildi.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
         }
+
+        // 2. Aşama (YENİ): Fiyat TP1 ile TP2 Arasının Yarısını Geçtiğinde Stop TP1'e Çekilir (Garantili Kâr Kilidi)
+        const midTargetLong = trade.tp1 + ((trade.tp2 - trade.tp1) * 0.5);
+        if (trade.tp1Hit && !trade.trailingHit && currentHigh >= midTargetLong && currentHigh < trade.tp2) {
+            trade.trailingHit = true;
+            trade.sl = trade.tp1;
+            await sendTelegramMessage(`🔒 <b>KÂR KİLİTLENDİ (İZ SÜREN STOP) | #${cleanSymbol}/USDT</b>\n\nFiyat TP2 yolunun yarısını devirdiği için Stop seviyesi girişten <b>TP1 SEVİYESİNE ($${formatPrice(trade.tp1, trade.entry)})</b> yükseltildi! Artık geri dönse bile kârımız garanti altında.\n⏱ <b>${nowTime}</b>`);
+        }
+
+        // 3. Aşama: TP2 Tam Hedef
         if (currentHigh >= trade.tp2) {
-            tradeHistory.push({ type: 'TP2', time: Date.now() });
+            recordTradeEvent('TP2', symbol);
             handleTradeResult(symbol, 'TP2');
             const gainPct = (((trade.tp2 - trade.entry) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n🚀 <b>Net Kazanç:</b> +%${gainPct}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             activeTrades.delete(symbol); return;
         }
+
+        // 4. Aşama: Stop Kontrolü
         if (currentLow <= trade.sl) {
-            if (trade.tp1Hit) {
-                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🛡️ <b>İŞLEM GİRİŞTEN KAPANDI | #${cleanSymbol}/USDT</b>\n\nTP1 alındıktan sonra stop noktamıza giriş seviyesinde değdi. (Net Zarar Yok).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            if (trade.trailingHit) {
+                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔒✅ <b>İZ SÜREN STOP İLE KÂRLI KAPANDI | #${cleanSymbol}/USDT</b>\n\nFiyat TP2 öncesi geri döndü ve kilitlediğimiz <b>TP1 ($${formatPrice(trade.sl, trade.entry)})</b> seviyesinden net kârla kapandı.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            } else if (trade.tp1Hit) {
+                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🛡️ <b>İŞLEM GİRİŞTEN KAPANDI | #${cleanSymbol}/USDT</b>\n\nTP1 alındıktan sonra stop noktamıza giriş seviyesinde değdi. (TP1 Kârı Cepte, Net Zarar Yok).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
-                tradeHistory.push({ type: 'STOP', time: Date.now() });
+                recordTradeEvent('STOP', symbol);
                 handleTradeResult(symbol, 'STOP');
                 await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🟢 LONG\n🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             }
@@ -537,26 +701,41 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
     }
 
     if (trade.side === 'SHORT') {
+        // 1. Aşama: TP1 Geldiğinde Stop Girişe Çekilir
         if (!trade.tp1Hit && currentLow <= trade.tp1) {
             trade.tp1Hit = true;
             trade.sl = trade.entry;
-            tradeHistory.push({ type: 'TP1', time: Date.now() });
+            recordTradeEvent('TP1', symbol);
             handleTradeResult(symbol, 'TP');
             const gainPct = (((trade.entry - trade.tp1) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>HEDEF GELDİ! (TP1 ALINDI) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n💰 <b>Kazanılan Kâr:</b> +%${gainPct}\n\n🛡️ Stop <b>GİRİŞ SEVİYESİNE</b> çekildi.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
         }
+
+        // 2. Aşama (YENİ): Fiyat TP1 ile TP2 Arasının Yarısını Geçtiğinde Stop TP1'e Çekilir
+        const midTargetShort = trade.tp1 - ((trade.tp1 - trade.tp2) * 0.5);
+        if (trade.tp1Hit && !trade.trailingHit && currentLow <= midTargetShort && currentLow > trade.tp2) {
+            trade.trailingHit = true;
+            trade.sl = trade.tp1;
+            await sendTelegramMessage(`🔒 <b>KÂR KİLİTLENDİ (İZ SÜREN STOP) | #${cleanSymbol}/USDT</b>\n\nFiyat TP2 yolunun yarısını devirdiği için Stop seviyesi girişten <b>TP1 SEVİYESİNE ($${formatPrice(trade.tp1, trade.entry)})</b> çekildi! Artık geri dönse bile kârımız garanti altında.\n⏱ <b>${nowTime}</b>`);
+        }
+
+        // 3. Aşama: TP2 Tam Hedef
         if (currentLow <= trade.tp2) {
-            tradeHistory.push({ type: 'TP2', time: Date.now() });
+            recordTradeEvent('TP2', symbol);
             handleTradeResult(symbol, 'TP2');
             const gainPct = (((trade.entry - trade.tp2) / trade.entry) * 100).toFixed(2);
             await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅✅ <b>TÜM HEDEFLER TAMAMLANDI! (TP2) | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n🚀 <b>Net Kazanç:</b> +%${gainPct}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             activeTrades.delete(symbol); return;
         }
+
+        // 4. Aşama: Stop Kontrolü
         if (currentHigh >= trade.sl) {
-            if (trade.tp1Hit) {
-                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🛡️ <b>İŞLEM GİRİŞTEN KAPANDI | #${cleanSymbol}/USDT</b>\n\nTP1 alındıktan sonra stop noktamıza giriş seviyesinde değdi. (Net Zarar Yok).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            if (trade.trailingHit) {
+                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔒✅ <b>İZ SÜREN STOP İLE KÂRLI KAPANDI | #${cleanSymbol}/USDT</b>\n\nFiyat TP2 öncesi geri döndü ve kilitlediğimiz <b>TP1 ($${formatPrice(trade.sl, trade.entry)})</b> seviyesinden net kârla kapandı.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            } else if (trade.tp1Hit) {
+                await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🛡️ <b>İŞLEM GİRİŞTEN KAPANDI | #${cleanSymbol}/USDT</b>\n\nTP1 alındıktan sonra stop noktamıza giriş seviyesinde değdi. (TP1 Kârı Cepte, Net Zarar Yok).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
-                tradeHistory.push({ type: 'STOP', time: Date.now() });
+                recordTradeEvent('STOP', symbol);
                 handleTradeResult(symbol, 'STOP');
                 await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\n\n🎯 <b>Yön:</b> 🔴 SHORT\n🛑 <b>Stop Fiyatı:</b> $${formatPrice(trade.sl, trade.entry)}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             }
@@ -566,8 +745,17 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow) 
     if (Date.now() - trade.time > 6 * 60 * 60 * 1000) activeTrades.delete(symbol);
 }
 
+function canOpenNewTrade(side) {
+    if (activeTrades.size >= MAX_TOTAL_ACTIVE_TRADES) return false;
+    let sameSideCount = 0;
+    for (const t of activeTrades.values()) {
+        if (t.side === side) sameSideCount++;
+    }
+    return sameSideCount < MAX_SAME_SIDE_TRADES;
+}
+
 // ==========================================
-// 7. TURBO HIZLI TARAMA MOTORU (87 PARİTE)
+// 7. TURBO HIZLI TARAMA MOTORU (87 PARİTE + 5 YENİ KALKAN)
 // ==========================================
 async function scanMarket() {
     try {
@@ -575,13 +763,13 @@ async function scanMarket() {
         const btc = await checkBtcCondition();
         if (!btc.safe) return;
 
-        let signalSentInThisCycle = false, scannedCount = 0, stochNeutralCount = 0, macroBlockedCount = 0;
+        let signalSentInThisCycle = false, scannedCount = 0, stochNeutralCount = 0, macroBlockedCount = 0, volumeBlockedCount = 0;
 
         for (const symbol of TARGET_COINS) {
             const prof = getCoinProfile(symbol);
             if (prof.quarantineUntil > Date.now()) continue;
 
-            // Önce 15M Grafiği Kontrol Et (87 Coin çok hızlı taranır)
+            // ADIM 1: Önce 15M Grafiği ve Aktif İşlemleri Kontrol Et
             const klines15m = await fetchUniversalKlines(symbol, "15", 55);
             await sleep(10);
             if (!klines15m || klines15m.length < 40) continue;
@@ -616,7 +804,18 @@ async function scanMarket() {
                 continue;
             }
 
-            // Kesişim yakalanan adaylar için 1H ve 4H makro teyidi çek
+            // ADIM 2: YENİ HACİM (VOLUME) FİLTRESİ
+            const volData = analyze15MVolume(klines15m);
+            if (!volData.isAlive) {
+                volumeBlockedCount++;
+                continue;
+            }
+
+            // ADIM 3: EŞZAMANLI İŞLEM LİMİTİ KONTROLÜ
+            const desiredSide = isPotentialLong ? 'LONG' : 'SHORT';
+            if (!canOpenNewTrade(desiredSide)) continue;
+
+            // ADIM 4: 1H VE 4H MAKRO ONAY KONTROLÜ
             const klines1h = await fetchUniversalKlines(symbol, "60", 55);
             const klines4h = await fetchUniversalKlines(symbol, "240", 55);
             if (!klines1h || klines1h.length < 25) continue;
@@ -638,7 +837,14 @@ async function scanMarket() {
                 continue;
             }
 
+            // ADIM 5: L/S ORANI VE FONLAMA ORANI (FUNDING RATE) KONTROLÜ
             const lsData = await fetchLongShortRatio(symbol);
+            const fundingData = await fetchFundingRate(symbol);
+            if ((isPotentialLong && fundingData.blockLong) || (isPotentialShort && fundingData.blockShort)) {
+                macroBlockedCount++;
+                continue;
+            }
+
             const atr15 = calculateATR(highs15, lows15, closes15, 14);
             const cleanSymbol = symbol.replace('USDT', '');
             let signal = null;
@@ -675,17 +881,27 @@ async function scanMarket() {
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 25 * 60 * 1000)) {
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>STOCH KESİŞİM & FİTİL ONAYLI SİNYAL</b> 🎯\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri:</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Tetik ve Dönüş Onayı:</b>\n• Profil: ${prof.category}\n• Stoch Kesişimi: <b>%K: ${stoch15m.k} | %D: ${stoch15m.d}</b> (Onaylı Dönüş ✅)\n• Mum & Fitil Tepkisi: <b>Mevcut ✅</b>\n\n🧭 <b>Makro & BTC Kalkanı:</b>\n• <b>1H Trend & RSI:</b> Uygun (RSI: ${rsi1h} | Şelale Yok ✅)\n• <b>BTC 15M Durumu:</b> %${btc.change15m} (${btc.btcTrend === 'NEUTRAL' ? 'Güvenli ✅' : btc.btcTrend})\n\n${lsData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
-                await sendTelegramMessage(msg);
+                activeTrades.set(symbol, { 
+                    side: signal.type.includes('LONG') ? 'LONG' : 'SHORT', 
+                    entry: signal.rawEntry, 
+                    sl: signal.rawSl, 
+                    tp1: signal.rawTp1, 
+                    tp2: signal.rawTp2, 
+                    tp1Hit: false, 
+                    trailingHit: false, 
+                    time: Date.now() 
+                });
                 alertedCoins.set(symbol, Date.now());
-                activeTrades.set(symbol, { side: signal.type.includes('LONG') ? 'LONG' : 'SHORT', entry: signal.rawEntry, sl: signal.rawSl, tp1: signal.rawTp1, tp2: signal.rawTp2, tp1Hit: false, time: Date.now() });
+
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🎯 <b>TAM ONAYLI PRO SİNYAL</b> 🎯\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri (İz Süren Stop Aktif):</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Tetik, Hacim ve Fonlama Onayı:</b>\n• Profil: ${prof.category}\n• Stoch Kesişimi: <b>%K: ${stoch15m.k} | %D: ${stoch15m.d}</b> (Onaylı Dönüş ✅)\n• 15M Hacim Gücü: <b>${volData.badge}</b>\n• Fonlama (Funding): <b>${fundingData.text}</b>\n• Aktif İşlem Kontenjanı: <b>${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}</b>\n\n🧭 <b>Makro & BTC Kalkanı:</b>\n• <b>1H Trend & RSI:</b> Uygun (RSI: ${rsi1h} | Şelale Yok ✅)\n• <b>BTC 15M Durumu:</b> %${btc.change15m} (${btc.btcTrend === 'NEUTRAL' ? 'Güvenli ✅' : btc.btcTrend})\n\n${lsData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+                await sendTelegramMessage(msg);
                 signalSentInThisCycle = true;
             }
         }
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta (Longlar Kilitli)" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda (Shortlar Kilitli)" : "⚪ Sakin / Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TURBO KESİŞİM TARAMA RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>Hızlı Taranan:</b> ${scannedCount} Parite (Süre: ~15-20 sn)\n⚡ <b>BTC Kalkanı:</b> %${btc.change15m} (${btcBadge})\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>15M Stoch Kesişimi / Fitil Bekleyen:</b> ${stochNeutralCount} Parite\n• <b>1H/4H Makro & Şelale Kalkanına Takılan:</b> ${macroBlockedCount} Parite\n\n${getStatsText()}\n\n⚠️ <i>"YTD" HEPSİ.</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TAM DONANIMLI TARAMA RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>Hızlı Taranan:</b> ${scannedCount} Parite | <b>Açık İşlem:</b> ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ <b>BTC Kalkanı:</b> %${btc.change15m} (${btcBadge})\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>15M Stoch Kesişimi / Fitil Bekleyen:</b> ${stochNeutralCount} Parite\n• <b>Düşük Hacim Filtresine Takılan:</b> ${volumeBlockedCount} Parite\n• <b>1H/4H Makro & Fonlama Kalkanına Takılan:</b> ${macroBlockedCount} Parite\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /kasa | /acik | /karantina | /sifirla | /dip | /tepe</i>\n⚠️ <i>"YTD" HEPSİ.</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -695,8 +911,8 @@ async function scanMarket() {
 // 8. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Turbo Crossover (87 Coins) Başlatıldı...");
-    sendTelegramMessage("🌐 <b>SİSTEM GÜNCELLENDİ:</b>\nSepet optimize edilerek güçlü hacimli paritelerle birlikte **87 adete** çıkarıldı. TRX, HYPE, ZEC gibi yeni majör ve yüksek hacimli altcoinler sisteme eklendi!");
+    console.log("🚀 ScalpPro Ultimate (87 Coins) Başlatıldı...");
+    sendTelegramMessage("🚀 <b>ULTIMATE SÜRÜM AKTİF EDİLDİ!</b>\n\n1️⃣ <b>Kalıcı $1000 Kasa:</b> Kasa artık 12 saatte bir kendi kendine sıfırlanmaz, sadece siz <b>/sifirla</b> yazdığınızda sıfırlanır!\n2️⃣ <b>15M Hacim Filtresi:</b> Ölü hacimli sahte kesişimler elenir, balina hacimleri yakalanır.\n3️⃣ <b>İz Süren Stop (Trailing Stop):</b> Fiyat TP2 yolunun yarısını geçince stop otomatik TP1'e çekilir ve kâr kilitlenir.\n4️⃣ <b>Fonlama Oranı (Funding) Kalkanı:</b> Ters sıkıştırma (squeeze) tuzakları engellenir.\n5️⃣ <b>Toplu Stop Kalkanı & Canlı Komutlar:</b> Maksimum 6 eşzamanlı işlem sınırı ve <b>/kasa, /acik, /karantina, /sifirla</b> komutları devrede!");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(10000); }
