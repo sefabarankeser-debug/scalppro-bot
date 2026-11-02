@@ -98,7 +98,7 @@ function handleTradeResult(symbol, resultType) {
 }
 
 // ==========================================
-// 3. KALICI KASA SİSTEMİ
+// 3. KALICI KASA SİSTEMİ (MANUEL KAPATMA DESTEKLİ)
 // ==========================================
 const WALLET_FILE = path.join(__dirname, 'kasa_yedek.json');
 let lastUpdateId = 0;
@@ -134,6 +134,17 @@ function resetPermanentWallet() {
     tradeHistory = [];
     walletStartTime = Date.now();
     saveWalletState();
+}
+
+function calculateCurrentBalance() {
+    let simBalance = 1000;
+    for (const t of tradeHistory) {
+        if (t.customMult && !isNaN(t.customMult)) simBalance *= t.customMult;
+        else if (t.type === 'TP1') simBalance *= 1.025;
+        else if (t.type === 'TP2') simBalance *= 1.050;
+        else if (t.type === 'STOP') simBalance *= 0.980;
+    }
+    return simBalance;
 }
 
 loadWalletState();
@@ -179,13 +190,7 @@ function getStatsText() {
     const stopCount = tradeHistory.filter(t => t.type === 'STOP' || t.type === 'MANUAL_LOSS').length;
     const totalTrades = tp1Count + tp2Count + stopCount;
 
-    let simBalance = 1000;
-    for (const t of tradeHistory) {
-        if (t.customMult && !isNaN(t.customMult)) simBalance *= t.customMult;
-        else if (t.type === 'TP1') simBalance *= 1.025;
-        else if (t.type === 'TP2') simBalance *= 1.050;
-        else if (t.type === 'STOP') simBalance *= 0.980;
-    }
+    const simBalance = calculateCurrentBalance();
 
     const netGainPct = (((simBalance - 1000) / 1000) * 100).toFixed(2);
     const sign = netGainPct >= 0 ? "+" : "";
@@ -311,14 +316,12 @@ function analyze15MVolume(klines15m) {
     return { isAlive, isSpike, ratio, badge };
 }
 
-// YENİ: Akıllı Para Konseptleri (Order Block & FVG) Tespiti
 function detectSmartMoneyStructure(klines) {
     if (!klines || klines.length < 10) return { hasOB: false, hasFVG: false, smcBadge: "Standart Yapı ⚙️" };
     
     let hasOB = false;
     let hasFVG = false;
 
-    // FVG (Fair Value Gap) Tespiti: Son 3 mumda aradaki boşluk
     for (let i = klines.length - 3; i < klines.length; i++) {
         if (i < 2) continue;
         const m1High = parseFloat(klines[i-2][2]);
@@ -326,11 +329,10 @@ function detectSmartMoneyStructure(klines) {
         const m1Low = parseFloat(klines[i-2][3]);
         const m3High = parseFloat(klines[i][2]);
 
-        if (m3Low > m1High) { hasFVG = true; break; } // Bullish FVG
-        if (m3High < m1Low) { hasFVG = true; break; } // Bearish FVG
+        if (m3Low > m1High) { hasFVG = true; break; }
+        if (m3High < m1Low) { hasFVG = true; break; }
     }
 
-    // Order Block (OB) Tespiti: Sert hareket öncesi son ters renkli mum
     for (let i = klines.length - 5; i < klines.length - 1; i++) {
         if (i < 0) continue;
         const open = parseFloat(klines[i][1]);
@@ -357,13 +359,12 @@ function detectSmartMoneyStructure(klines) {
     return { hasOB, hasFVG, smcBadge: badge };
 }
 
-// YENİ: Hibrit Puanlama (Stoch + Hacim + SMC)
 function evaluateSignalQuality(side, stoch15m, volData, lsData, fundingData, candleData, smc) {
     let score = 0;
     if (volData.ratio >= 1.15) score++;
     if ((side === 'LONG' && stoch15m.k <= 18) || (side === 'SHORT' && stoch15m.k >= 82)) score++;
     if ((side === 'LONG' && lsData.longPct <= 56) || (side === 'SHORT' && lsData.shortPct <= 56)) score++;
-    if (smc.hasOB || smc.hasFVG) score += 2; // SMC desteği varsa ekstra güçlü puan
+    if (smc.hasOB || smc.hasFVG) score += 2;
     if ((side === 'LONG' && candleData.netGain >= 0.3) || (side === 'SHORT' && candleData.netGain <= -0.3)) score++;
 
     if (score >= 4) {
@@ -541,7 +542,7 @@ async function checkBtcCondition() {
 }
 
 // ==========================================
-// 5. CANLI TELEGRAM KOMUTLARI
+// 5. CANLI TELEGRAM KOMUTLARI (DÜZELTİLMİŞ MANUEL KAPATMA)
 // ==========================================
 async function sendOpenTradesReport(replyToId = null) {
     if (activeTrades.size === 0) {
@@ -594,11 +595,13 @@ async function sendOpenTradesReport(replyToId = null) {
     await sendTelegramMessage(lines.join('\n'), replyToId);
 }
 
+// DÜZELTİLDİ: Manuel Kapatmada Kârı Her Durumda Kasaya Ekler ve Eski -> Yeni Kasa Farkını Gösterir!
 async function closeManualTradeCommand(rawTarget, replyToId = null) {
     if (!rawTarget) {
-        return sendTelegramMessage(`⚠️ Lütfen kapatmak istediğiniz coini yazın. Örnek: <b>/kapat zro</b> veya <b>/kapat hepsi</b>`, replyToId);
+        return sendTelegramMessage(`⚠️ Lütfen kapatmak istediğiniz coini yazın. Örnek: <b>/kapat gmx</b> veya <b>/kapat hepsi</b>`, replyToId);
     }
     const cleanArg = rawTarget.toUpperCase().trim();
+    const oldBalance = calculateCurrentBalance();
 
     if (cleanArg === 'HEPSI' || cleanArg === 'HEPSİ' || cleanArg === 'TUMU' || cleanArg === 'TÜMÜ' || cleanArg === 'ALL') {
         if (activeTrades.size === 0) return sendTelegramMessage(`ℹ️ Kapatılacak açık işlem bulunmuyor.`, replyToId);
@@ -606,14 +609,25 @@ async function closeManualTradeCommand(rawTarget, replyToId = null) {
         for (const [sym, t] of activeTrades.entries()) {
             const livePrice = await fetchLivePrice(sym, t.lastPrice || t.entry);
             const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
-            if (!t.tp1Hit) {
-                const mult = 1 + (pnlPct / 100);
-                recordTradeEvent(pnlPct >= 0 ? 'MANUAL_WIN' : 'MANUAL_LOSS', sym, mult);
+            
+            // Eğer TP1 zaten alındıysa sadece TP1 üstü kalan farkı, alınmadıysa tüm PNL'i (2x simüle kaldıraç çarpanıyla) kasaya ekler
+            let effectivePnlPct = pnlPct;
+            if (t.tp1Hit) {
+                const tp1Pct = t.side === 'LONG' ? (((t.tp1 - t.entry) / t.entry) * 100) : (((t.entry - t.tp1) / t.entry) * 100);
+                effectivePnlPct = Math.max(0, pnlPct - tp1Pct);
             }
-            closedSummary.push(`• <b>#${sym.replace('USDT', '')}</b> (${t.side}): ${pnlPct >= 0 ? '+' : ''}%${pnlPct.toFixed(2)}`);
+            const mult = 1 + ((effectivePnlPct * 2.0) / 100);
+            if (effectivePnlPct !== 0 || !t.tp1Hit) {
+                recordTradeEvent(pnlPct >= 0 ? 'MANUAL_WIN' : 'MANUAL_LOSS', sym, mult);
+                handleTradeResult(sym, pnlPct >= 0 ? 'TP' : 'STOP');
+            }
+            closedSummary.push(`• <b>#${sym.replace('USDT', '')}</b> (${t.side}): ${pnlPct >= 0 ? '+' : ''}%${pnlPct.toFixed(2)} (10x: ${pnlPct >= 0 ? '+' : ''}%${(pnlPct * 10).toFixed(1)})`);
             activeTrades.delete(sym);
         }
-        return sendTelegramMessage(`🖐️ <b>TÜM AÇIK İŞLEMLER MANUEL KAPATILDI!</b>\n\n${closedSummary.join('\n')}\n\n${getStatsText()}`, replyToId);
+        const newBalance = calculateCurrentBalance();
+        const diff = newBalance - oldBalance;
+        const diffSign = diff >= 0 ? "+" : "";
+        return sendTelegramMessage(`🖐️ <b>TÜM AÇIK İŞLEMLER MANUEL KAPATILDI!</b>\n\n${closedSummary.join('\n')}\n\n💼 <b>Kasa Değişimi:</b> $${oldBalance.toFixed(2)} ➔ <b>$${newBalance.toFixed(2)}</b> (<b>${diffSign}$${diff.toFixed(2)}</b>)\n\n${getStatsText()}`, replyToId);
     }
 
     let sym = cleanArg.replace(/[^A-Z0-9]/g, '');
@@ -628,14 +642,27 @@ async function closeManualTradeCommand(rawTarget, replyToId = null) {
     const t = activeTrades.get(sym);
     const livePrice = await fetchLivePrice(sym, t.lastPrice || t.entry);
     const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
-    if (!t.tp1Hit) {
-        const mult = 1 + (pnlPct / 100);
+
+    let effectivePnlPct = pnlPct;
+    if (t.tp1Hit) {
+        const tp1Pct = t.side === 'LONG' ? (((t.tp1 - t.entry) / t.entry) * 100) : (((t.entry - t.tp1) / t.entry) * 100);
+        effectivePnlPct = Math.max(0, pnlPct - tp1Pct);
+    }
+
+    // Simüle kasa TP1'de ortalama +%2.5 büyüdüğü için manuel kapatmada da 2x simülasyon çarpanıyla kasaya net eklenir
+    const mult = 1 + ((effectivePnlPct * 2.0) / 100);
+    if (effectivePnlPct !== 0 || !t.tp1Hit) {
         recordTradeEvent(pnlPct >= 0 ? 'MANUAL_WIN' : 'MANUAL_LOSS', sym, mult);
+        handleTradeResult(sym, pnlPct >= 0 ? 'TP' : 'STOP');
     }
     activeTrades.delete(sym);
 
+    const newBalance = calculateCurrentBalance();
+    const diff = newBalance - oldBalance;
+    const diffSign = diff >= 0 ? "+" : "";
     const sign = pnlPct >= 0 ? "+" : "";
-    await sendTelegramMessage(`🖐️ <b>İŞLEM MANUEL OLARAK KAPATILDI | #${sym.replace('USDT', '')}</b>\n\n🎯 <b>Yön:</b> ${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}\n💵 <b>Giriş:</b> $${formatPrice(t.entry, t.entry)} ➔ <b>Çıkış:</b> $${formatPrice(livePrice, t.entry)}\n💰 <b>Gerçekleşen PNL:</b> <b>${sign}%${pnlPct.toFixed(2)}</b> (10x: ${sign}%${(pnlPct * 10).toFixed(1)})\n\n${getStatsText()}`, replyToId);
+
+    await sendTelegramMessage(`🖐️ <b>İŞLEM MANUEL OLARAK KAPATILDI | #${sym.replace('USDT', '')}</b>\n\n🎯 <b>Yön:</b> ${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}\n💵 <b>Giriş:</b> $${formatPrice(t.entry, t.entry)} ➔ <b>Çıkış:</b> $${formatPrice(livePrice, t.entry)}\n💰 <b>Gerçekleşen PNL:</b> <b>${sign}%${pnlPct.toFixed(2)}</b> (10x: <b>${sign}%${(pnlPct * 10).toFixed(1)}</b>)\n💼 <b>Kasa Değişimi:</b> $${oldBalance.toFixed(2)} ➔ <b>$${newBalance.toFixed(2)}</b> (<b>${diffSign}$${diff.toFixed(2)} Eklendi!</b>)\n\n${getStatsText()}`, replyToId);
 }
 
 async function sendCoinPerformanceReport(replyToId = null) {
@@ -806,11 +833,11 @@ async function pollTelegramUpdates() {
                 }
                 if (lowerTxt === 'sifirla' || lowerTxt === '/sifirla' || lowerTxt === 'sıfırla' || lowerTxt === '/sıfırla') {
                     resetPermanentWallet();
-                    await sendTelegramMessage(`🔄 <b>SİMÜLE KASA KOMUTUNUZla SIFIRLANDI!</b>\n\nTüm geçmiş işlem istatistikleri temizlendi ve kalıcı kasa <b>$1000.00</b> olarak yeniden başlatıldı.\n⏱ <b>${getTurkishTimeString()}</b>`, message.message_id);
+                    await sendTelegramMessage(`🔄 <b>SİMÜLE KASA KOMUTUNUZLA SIFIRLANDI!</b>\n\nTüm geçmiş işlem istatistikleri temizlendi ve kalıcı kasa <b>$1000.00</b> olarak yeniden başlatıldı.\n⏱ <b>${getTurkishTimeString()}</b>`, message.message_id);
                     continue;
                 }
                 if (lowerTxt === 'yardim' || lowerTxt === '/yardim' || lowerTxt === 'komutlar' || lowerTxt === '/komutlar') {
-                    await sendTelegramMessage(`🤖 <b>SCALPPRO HİBRİT SMC KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri, canlı fiyatları, anlık PNL'i ve hedefe mesafeyi gösterir.\n• <b>/kapat coin</b> : İstediğiniz işlemi anlık fiyattan kapatır (Örn: <code>/kapat zro</code> veya <code>/kapat hepsi</code>).\n• <b>/kasa</b> : Kalıcı $1000 PNL kasasını gösterir.\n• <b>/karne</b> : En çok kazandıran ve stop eden coinlerin karnesini çıkarır.\n• <b>/karantina</b> : Cezalı veya dikkat izlenen coinleri gösterir.\n• <b>/sifirla</b> : $1000 simüle kasayı sıfırlayıp baştan başlatır.\n• <b>/dip</b> veya <b>/tepe</b> : Stoch RSI dip/tepe coinleri tarar.\n• <b>Coin Adı (Örn: sei, sol, btc)</b> : O coinin detaylı röntgenini çeker.`, message.message_id);
+                    await sendTelegramMessage(`🤖 <b>SCALPPRO HİBRİT SMC KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri, canlı fiyatları, anlık PNL'i ve hedefe mesafeyi gösterir.\n• <b>/kapat coin</b> : İstediğiniz işlemi anlık fiyattan kapatır ve kârı doğrudan kasaya ekler (Örn: <code>/kapat gmx</code> veya <code>/kapat hepsi</code>).\n• <b>/kasa</b> : Kalıcı $1000 PNL kasasını gösterir.\n• <b>/karne</b> : En çok kazandıran ve stop eden coinlerin karnesini çıkarır.\n• <b>/karantina</b> : Cezalı veya dikkat izlenen coinleri gösterir.\n• <b>/sifirla</b> : $1000 simüle kasayı sıfırlayıp baştan başlatır.\n• <b>/dip</b> veya <b>/tepe</b> : Stoch RSI dip/tepe coinleri tarar.\n• <b>Coin Adı (Örn: sei, sol, btc)</b> : O coinin detaylı röntgenini çeker.`, message.message_id);
                     continue;
                 }
 
@@ -936,7 +963,7 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow, 
     if (Date.now() - trade.time > 6 * 60 * 60 * 1000) {
         const pnlPct = trade.side === 'LONG' ? (((currentPrice - trade.entry) / trade.entry) * 100) : (((trade.entry - currentPrice) / trade.entry) * 100);
         if (!trade.tp1Hit) {
-            recordTradeEvent(pnlPct >= 0 ? 'MANUAL_WIN' : 'MANUAL_LOSS', symbol, 1 + (pnlPct / 100));
+            recordTradeEvent(pnlPct >= 0 ? 'MANUAL_WIN' : 'MANUAL_LOSS', symbol, 1 + ((pnlPct * 2.0) / 100));
         }
         const sign = pnlPct >= 0 ? "+" : "";
         await sendTelegramMessage(`⌛ <b>ZAMAN AŞIMI (6 SAAT DOLDU) | #${cleanSymbol}/USDT</b>\n\n6 saat boyunca ana hedeflere ulaşmayan işlem kontenjan boşaltmak için güncel fiyattan ($${formatPrice(currentPrice, trade.entry)} | <b>${sign}%${pnlPct.toFixed(2)}</b>) kapatıldı.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
@@ -1115,7 +1142,7 @@ async function scanMarket() {
 // ==========================================
 async function runLoop() {
     console.log("🚀 ScalpPro Hibrit SMC + Stoch Ultimate Başlatıldı...");
-    sendTelegramMessage("💎⚡ <b>HİBRİT SMC + STOCH ULTIMATE AKTİF!</b>\n\n1️⃣ <b>Order Block (OB) & FVG Tespiti:</b> Balinaların kurumsal blokları ve adil değer boşlukları artık anlık taranıyor!\n2️⃣ <b>Hibrit Sinyal Puanlaması:</b> Hem Stoch RSI dip/tepe dönüşleri hem de SMC blok uyumları birleştirilerek A+ sinyaller derecelendiriliyor.\n3️⃣ <b>Tüm Kalkanlar Devrede:</b> Canlı PNL, iz süren stop, BTC şok kalkanı ve 15 eşzamanlı işlem kapasitesi tam gaz çalışıyor!");
+    sendTelegramMessage("💎⚡ <b>HİBRİT SMC + MANUEL KÂR DÜZELTMESİ AKTİF!</b>\n\n1️⃣ <b>Manuel Kapatma (/kapat) Güncellendi:</b> Artık <code>/kapat coin</code> yazdığınızda kârınız kuruşu kuruşuna simüle kasaya eklenir ve kasanın eski/yeni hali net olarak gösterilir!\n2️⃣ <b>Order Block (OB) & FVG Tespiti:</b> Kurumsal bloklar ve adil değer boşlukları anlık taranıyor.\n3️⃣ <b>Tüm Kalkanlar Devrede:</b> Canlı PNL, iz süren stop, BTC şok kalkanı ve 15 eşzamanlı işlem kapasitesi aktif!");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(10000); }
