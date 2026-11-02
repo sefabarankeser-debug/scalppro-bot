@@ -17,7 +17,7 @@ const path = require('path');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro V-Tipi Dip Dönüşlü VIP Ultimate (87 Coins) Active\n');
+    res.end('ScalpPro Hybrid SMC + Stoch Ultimate (87 Coins) Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -29,7 +29,7 @@ const MAX_TOTAL_ACTIVE_TRADES = 15;
 const MAX_SAME_SIDE_TRADES = 10;
 
 // ==========================================
-// 2. ADAPTİF PROFİLLER VE SEÇİCİ SEPET (87 PARİTE + GENİŞLETİLMİŞ DİP/TEPE EŞİKLERİ)
+// 2. ADAPTİF PROFİLLER VE SEÇİCİ SEPET (87 PARİTE)
 // ==========================================
 const BASE_PROFILES = {
     MAJOR: { category: "💎 Majör / Trend Sadık", stochLong: 32, stochShort: 68, atrMultiplier: 1.4, maxLsRatio: 68 },
@@ -204,7 +204,7 @@ function getActiveSessionName() {
 }
 
 // ==========================================
-// 4. API MOTORLARI & İNDİKATÖRLER
+// 4. API MOTORLARI & İNDİKATÖRLER (SMC / OB / FVG)
 // ==========================================
 function fetchJSON(url, customHeaders = {}) {
     return new Promise((resolve, reject) => {
@@ -311,18 +311,65 @@ function analyze15MVolume(klines15m) {
     return { isAlive, isSpike, ratio, badge };
 }
 
-function evaluateSignalQuality(side, stoch15m, volData, lsData, fundingData, candleData) {
+// YENİ: Akıllı Para Konseptleri (Order Block & FVG) Tespiti
+function detectSmartMoneyStructure(klines) {
+    if (!klines || klines.length < 10) return { hasOB: false, hasFVG: false, smcBadge: "Standart Yapı ⚙️" };
+    
+    let hasOB = false;
+    let hasFVG = false;
+
+    // FVG (Fair Value Gap) Tespiti: Son 3 mumda aradaki boşluk
+    for (let i = klines.length - 3; i < klines.length; i++) {
+        if (i < 2) continue;
+        const m1High = parseFloat(klines[i-2][2]);
+        const m3Low = parseFloat(klines[i][3]);
+        const m1Low = parseFloat(klines[i-2][3]);
+        const m3High = parseFloat(klines[i][2]);
+
+        if (m3Low > m1High) { hasFVG = true; break; } // Bullish FVG
+        if (m3High < m1Low) { hasFVG = true; break; } // Bearish FVG
+    }
+
+    // Order Block (OB) Tespiti: Sert hareket öncesi son ters renkli mum
+    for (let i = klines.length - 5; i < klines.length - 1; i++) {
+        if (i < 0) continue;
+        const open = parseFloat(klines[i][1]);
+        const close = parseFloat(klines[i][4]);
+        const nextClose = parseFloat(klines[i+1][4]);
+        const nextOpen = parseFloat(klines[i+1][1]);
+
+        const isRed = close < open;
+        const isGreen = close > open;
+        const nextIsStrongPump = nextClose > nextOpen && (nextClose - nextOpen) > Math.abs(close - open) * 1.5;
+        const nextIsStrongDump = nextClose < nextOpen && (open - close) > Math.abs(nextOpen - nextClose) * 1.5;
+
+        if ((isRed && nextIsStrongPump) || (isGreen && nextIsStrongDump)) {
+            hasOB = true;
+            break;
+        }
+    }
+
+    let badge = "Standart Yapı ⚙️";
+    if (hasOB && hasFVG) badge = "💎 Bullish/Bearish OB + FVG (Smart Money)";
+    else if (hasOB) badge = "🧱 Order Block (Kurumsal Blok)";
+    else if (hasFVG) badge = "🕳️ Fair Value Gap (Adil Değer Boşluğu)";
+
+    return { hasOB, hasFVG, smcBadge: badge };
+}
+
+// YENİ: Hibrit Puanlama (Stoch + Hacim + SMC)
+function evaluateSignalQuality(side, stoch15m, volData, lsData, fundingData, candleData, smc) {
     let score = 0;
     if (volData.ratio >= 1.15) score++;
     if ((side === 'LONG' && stoch15m.k <= 18) || (side === 'SHORT' && stoch15m.k >= 82)) score++;
     if ((side === 'LONG' && lsData.longPct <= 56) || (side === 'SHORT' && lsData.shortPct <= 56)) score++;
-    if ((side === 'LONG' && fundingData.ratePct <= 0.005) || (side === 'SHORT' && fundingData.ratePct >= 0.015)) score++;
+    if (smc.hasOB || smc.hasFVG) score += 2; // SMC desteği varsa ekstra güçlü puan
     if ((side === 'LONG' && candleData.netGain >= 0.3) || (side === 'SHORT' && candleData.netGain <= -0.3)) score++;
 
-    if (score >= 3) {
-        return { stars: "🔥⭐⭐⭐⭐⭐", title: "A+ VIP BALİNA SİNYALİ (Yüksek Güven!)", score };
-    } else if (score === 2) {
-        return { stars: "⭐⭐⭐⭐", title: "GÜÇLÜ MOMENTUM SİNYALİ", score };
+    if (score >= 4) {
+        return { stars: "🔥⭐⭐⭐⭐⭐", title: "A+ VIP BALİNA & SMC SİNYALİ (Yüksek Güven!)", score };
+    } else if (score === 3) {
+        return { stars: "⭐⭐⭐⭐", title: "GÜÇLÜ MOMENTUM & BLOK SİNYALİ", score };
     }
     return { stars: "⭐⭐⭐", title: "STANDART ONAYLI SİNYAL", score };
 }
@@ -675,6 +722,7 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     const stoch15m = calculateStochRSI(closes15);
     const volData = analyze15MVolume(klines15m);
     const fundingData = await fetchFundingRate(symbol);
+    const smc = detectSmartMoneyStructure(klines15m);
     
     let rsi1h = "N/A", ema50_1h = null;
     let mom1h = { isWaterfall: false, isRocket: false, curChange: "0.00", prevChange: "0.00" };
@@ -685,8 +733,8 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
         mom1h = analyze1HMomentum(klines1h);
     }
 
-    const isBull1H = (currentPrice >= ema50_1h * 0.995 && rsi1h >= 42) || rsi1h >= 48;
-    const isBear1H = (currentPrice <= ema50_1h * 1.005 && rsi1h <= 58) || rsi1h <= 52;
+    const isBull1H = (currentPrice >= ema50_1h * 0.990 || rsi1h >= 42);
+    const isBear1H = (currentPrice <= ema50_1h * 1.010 || rsi1h <= 58);
     let trendText = isBull1H ? "🟢 Yükseliş / V-Dönüş Uygun" : isBear1H ? "🔴 Düşüş Eğilimi (Ayı)" : "⚪ Esnek / Kararsız";
     
     const lsData = await fetchLongShortRatio(symbol);
@@ -695,7 +743,7 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
 
     let crossText = stoch15m.bullCross ? "🟢 Yukarı Kesişim (%K > %D)" : stoch15m.bearCross ? "🔴 Aşağı Kesişim (%K < %D)" : "⏳ Kesişim Bekleniyor";
 
-    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Ana Trend:</b> ${trendText} (RSI: ${rsi1h})\n⚡ <b>15M Stoch RSI:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d}\n🔀 <b>Kesişim Durumu:</b> ${crossText}\n📊 <b>15M Hacim Durumu:</b> ${volData.badge}\n💸 <b>Fonlama (Funding):</b> ${fundingData.text}\n\n⚙️ <b>Profil:</b> ${prof.category}\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Ana Trend:</b> ${trendText} (RSI: ${rsi1h})\n⚡ <b>15M Stoch RSI:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d}\n🔀 <b>Kesişim Durumu:</b> ${crossText}\n📊 <b>15M Hacim Durumu:</b> ${volData.badge}\n🏛️ <b>Smart Money (SMC):</b> ${smc.smcBadge}\n💸 <b>Fonlama (Funding):</b> ${fundingData.text}\n\n⚙️ <b>Profil:</b> ${prof.category}\n${lsData.text}\n\n${candleData.reportText}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
@@ -758,11 +806,11 @@ async function pollTelegramUpdates() {
                 }
                 if (lowerTxt === 'sifirla' || lowerTxt === '/sifirla' || lowerTxt === 'sıfırla' || lowerTxt === '/sıfırla') {
                     resetPermanentWallet();
-                    await sendTelegramMessage(`🔄 <b>SİMÜLE KASA KOMUTUNUZLA SIFIRLANDI!</b>\n\nTüm geçmiş işlem istatistikleri temizlendi ve kalıcı kasa <b>$1000.00</b> olarak yeniden başlatıldı.\n⏱ <b>${getTurkishTimeString()}</b>`, message.message_id);
+                    await sendTelegramMessage(`🔄 <b>SİMÜLE KASA KOMUTUNUZla SIFIRLANDI!</b>\n\nTüm geçmiş işlem istatistikleri temizlendi ve kalıcı kasa <b>$1000.00</b> olarak yeniden başlatıldı.\n⏱ <b>${getTurkishTimeString()}</b>`, message.message_id);
                     continue;
                 }
                 if (lowerTxt === 'yardim' || lowerTxt === '/yardim' || lowerTxt === 'komutlar' || lowerTxt === '/komutlar') {
-                    await sendTelegramMessage(`🤖 <b>SCALPPRO V-DÖNÜŞLÜ VIP KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri, canlı fiyatları, anlık PNL'i ve hedefe mesafeyi gösterir.\n• <b>/kapat coin</b> : İstediğiniz işlemi anlık fiyattan kapatır (Örn: <code>/kapat zro</code> veya <code>/kapat hepsi</code>).\n• <b>/kasa</b> : Kalıcı $1000 PNL kasasını gösterir.\n• <b>/karne</b> : En çok kazandıran ve stop eden coinlerin karnesini çıkarır.\n• <b>/karantina</b> : Cezalı veya dikkat izlenen coinleri gösterir.\n• <b>/sifirla</b> : $1000 simüle kasayı sıfırlayıp baştan başlatır.\n• <b>/dip</b> veya <b>/tepe</b> : Stoch RSI dip/tepe coinleri tarar.\n• <b>Coin Adı (Örn: sei, sol, btc)</b> : O coinin detaylı röntgenini çeker.`, message.message_id);
+                    await sendTelegramMessage(`🤖 <b>SCALPPRO HİBRİT SMC KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri, canlı fiyatları, anlık PNL'i ve hedefe mesafeyi gösterir.\n• <b>/kapat coin</b> : İstediğiniz işlemi anlık fiyattan kapatır (Örn: <code>/kapat zro</code> veya <code>/kapat hepsi</code>).\n• <b>/kasa</b> : Kalıcı $1000 PNL kasasını gösterir.\n• <b>/karne</b> : En çok kazandıran ve stop eden coinlerin karnesini çıkarır.\n• <b>/karantina</b> : Cezalı veya dikkat izlenen coinleri gösterir.\n• <b>/sifirla</b> : $1000 simüle kasayı sıfırlayıp baştan başlatır.\n• <b>/dip</b> veya <b>/tepe</b> : Stoch RSI dip/tepe coinleri tarar.\n• <b>Coin Adı (Örn: sei, sol, btc)</b> : O coinin detaylı röntgenini çeker.`, message.message_id);
                     continue;
                 }
 
@@ -906,7 +954,7 @@ function canOpenNewTrade(side) {
 }
 
 // ==========================================
-// 7. TURBO HIZLI TARAMA MOTORU (V-DÖNÜŞLÜ ESNEK TREND FİLTRESİ)
+// 7. TURBO HIZLI TARAMA MOTORU (SMC + Stoch Hibrit)
 // ==========================================
 async function scanMarket() {
     try {
@@ -946,7 +994,6 @@ async function scanMarket() {
             const hasBullReversalCandle = (lowerWick >= bodySize * 0.20) || (currentPrice > currentOpen);
             const hasBearReversalCandle = (upperWick >= bodySize * 0.20) || (currentPrice < currentOpen);
 
-            // Genişletilmiş Kesişim ve Dip/Tepe Şartı
             const isPotentialLong = (stoch15m.k <= prof.stochLong && stoch15m.bullCross && hasBullReversalCandle && btc.btcTrend !== "DUMP");
             const isPotentialShort = (stoch15m.k >= prof.stochShort && stoch15m.bearCross && hasBearReversalCandle && btc.btcTrend !== "PUMP");
 
@@ -974,9 +1021,8 @@ async function scanMarket() {
             const currentPrice1h = closes1h[closes1h.length - 1];
             const mom1h = analyze1HMomentum(klines1h);
 
-            // V-TİPİ DÖNÜŞ İSTİSNASI (SEI gibi dip tepkilerini kaçırmamak için EMA50 şartı esnetildi)
-            const canLong1H = ((currentPrice1h >= ema50_1h * 0.990 || rsi1h >= 40) && !mom1h.isWaterfall);
-            const canShort1H = ((currentPrice1h <= ema50_1h * 1.010 || rsi1h <= 60) && !mom1h.isRocket);
+            const canLong1H = ((currentPrice1h >= ema50_1h * 0.990 || rsi1h >= 42) && !mom1h.isWaterfall);
+            const canShort1H = ((currentPrice1h <= ema50_1h * 1.010 || rsi1h <= 58) && !mom1h.isRocket);
 
             let candleData = { reportText: "⚠️ 4H Verisi Alınamadı", netGain: 0, isBearDominance: false, isBullDominance: false };
             if (klines4h && klines4h.length >= 20) candleData = analyze4HCandles(klines4h);
@@ -992,6 +1038,8 @@ async function scanMarket() {
                 macroBlockedCount++;
                 continue;
             }
+
+            const smc = detectSmartMoneyStructure(klines15m);
 
             const atr15 = calculateATR(highs15, lows15, closes15, 14);
             const cleanSymbol = symbol.replace('USDT', '');
@@ -1031,7 +1079,7 @@ async function scanMarket() {
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 20 * 60 * 1000)) {
-                const quality = evaluateSignalQuality(signal.side, stoch15m, volData, lsData, fundingData, candleData);
+                const quality = evaluateSignalQuality(signal.side, stoch15m, volData, lsData, fundingData, candleData, smc);
 
                 activeTrades.set(symbol, { 
                     side: signal.side, 
@@ -1048,7 +1096,7 @@ async function scanMarket() {
                 });
                 alertedCoins.set(symbol, Date.now());
 
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n${quality.stars} <b>${quality.title} (V-Dönüş Modu)</b>\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri (İz Süren & Şok Stop Aktif):</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Tetik, Hacim ve Fonlama Onayı:</b>\n• Profil: ${prof.category}\n• Stoch Kesişimi: <b>%K: ${stoch15m.k} | %D: ${stoch15m.d}</b> (V-Dönüş Onayı ✅)\n• 15M Hacim Gücü: <b>${volData.badge}</b>\n• Fonlama (Funding): <b>${fundingData.text}</b>\n• Aktif İşlem Kontenjanı: <b>${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}</b>\n\n🧭 <b>Makro & BTC Kalkanı:</b>\n• <b>1H Trend & RSI:</b> Uygun (RSI: ${rsi1h})\n• <b>BTC 15M Durumu:</b> %${btc.change15m} (${btc.btcTrend === 'NEUTRAL' ? 'Güvenli ✅' : btc.btcTrend})\n\n${lsData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n${quality.stars} <b>${quality.title}</b>\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Önerilen Stop:</b> $${signal.sl}\n⚖️ <b>Önerilen Kaldıraç:</b> 5x – 10x\n\n🎯 <b>Kademeli Kâr Hedefleri (İz Süren & Şok Stop Aktif):</b>\n• <b>TP1 (İlk Kâr - %${signal.tp1Pct}):</b> $${signal.tp1}\n• <b>TP2 (Trend Kârı):</b> $${signal.tp2}\n\n⚙️ <b>Tetik, Hacim ve SMC Onayı:</b>\n• Profil: ${prof.category}\n• Stoch Kesişimi: <b>%K: ${stoch15m.k} | %D: ${stoch15m.d}</b> (Onaylı ✅)\n• 15M Hacim Gücü: <b>${volData.badge}</b>\n• Smart Money (SMC): <b>${smc.smcBadge}</b>\n• Fonlama (Funding): <b>${fundingData.text}</b>\n• Aktif İşlem Kontenjanı: <b>${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}</b>\n\n🧭 <b>Makro & BTC Kalkanı:</b>\n• <b>1H Trend & RSI:</b> Uygun (RSI: ${rsi1h})\n• <b>BTC 15M Durumu:</b> %${btc.change15m} (${btc.btcTrend === 'NEUTRAL' ? 'Güvenli ✅' : btc.btcTrend})\n\n${lsData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(msg);
                 signalSentInThisCycle = true;
             }
@@ -1056,7 +1104,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta (Longlar Kilitli)" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda (Shortlar Kilitli)" : "⚪ Sakin / Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] V-DÖNÜŞLÜ VIP TARAMA RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>Hızlı Taranan:</b> ${scannedCount} Parite | <b>Açık İşlem:</b> ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ <b>BTC Kalkanı:</b> %${btc.change15m} (${btcBadge})\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>15M Stoch Kesişimi Bekleyen:</b> ${stochNeutralCount} Parite\n• <b>Düşük Hacim Filtresine Takılan:</b> ${volumeBlockedCount} Parite\n• <b>Makro / Fonlama Kalkanına Takılan:</b> ${macroBlockedCount} Parite\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /kapat | /kasa | /karne | /karantina | /sifirla</i>\n⚠️ <i>"YTD" HEPSİ.</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] HİBRİT SMC TARAMA RAPORU</b>\n\n🌐 <b>Aktif Seans:</b> ${session}\n📊 <b>Hızlı Taranan:</b> ${scannedCount} Parite | <b>Açık İşlem:</b> ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ <b>BTC Kalkanı:</b> %${btc.change15m} (${btcBadge})\n\n🔍 <b>Neden Sinyal Çıkmadı?</b>\n• <b>15M Stoch Kesişimi Bekleyen:</b> ${stochNeutralCount} Parite\n• <b>Düşük Hacim Filtresine Takılan:</b> ${volumeBlockedCount} Parite\n• <b>Makro / Fonlama Kalkanına Takılan:</b> ${macroBlockedCount} Parite\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /kapat | /kasa | /karne | /karantina | /sifirla</i>\n⚠️ <i>"YTD" HEPSİ.</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -1066,8 +1114,8 @@ async function scanMarket() {
 // 8. ANA ÇALIŞTIRICI
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro V-Dönüşlü VIP Ultimate Başlatıldı...");
-    sendTelegramMessage("⚡🔄 <b>V-DÖNÜŞLÜ VIP ULTIMATE AKTİF!</b>\n\n1️⃣ <b>V-Tipi Dip Dönüş İstisnası:</b> SEI gibi sert düşüşlerden sonra aniden dönen dipler artık 1H EMA50 engeline takılmadan yakalanıyor!\n2️⃣ <b>Genişletilmiş Kesişim Penceresi:</b> Stoch RSI dip/tepe sınırları esnetilerek fırsat kaçırma oranı sıfırlandı.\n3️⃣ <b>Tüm VIP Özellikler Devrede:</b> Canlı PNL'li <code>/acik</code>, <code>/kapat</code>, <code>/karne</code> ve acil BTC şok kalkanı aktif!");
+    console.log("🚀 ScalpPro Hibrit SMC + Stoch Ultimate Başlatıldı...");
+    sendTelegramMessage("💎⚡ <b>HİBRİT SMC + STOCH ULTIMATE AKTİF!</b>\n\n1️⃣ <b>Order Block (OB) & FVG Tespiti:</b> Balinaların kurumsal blokları ve adil değer boşlukları artık anlık taranıyor!\n2️⃣ <b>Hibrit Sinyal Puanlaması:</b> Hem Stoch RSI dip/tepe dönüşleri hem de SMC blok uyumları birleştirilerek A+ sinyaller derecelendiriliyor.\n3️⃣ <b>Tüm Kalkanlar Devrede:</b> Canlı PNL, iz süren stop, BTC şok kalkanı ve 15 eşzamanlı işlem kapasitesi tam gaz çalışıyor!");
     
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1500); } })();
     while (true) { await scanMarket(); await sleep(10000); }
