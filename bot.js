@@ -18,7 +18,7 @@ const zlib = require('zlib');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Quant V3 - Compounding Margin & Natural ATR Active\n');
+    res.end('ScalpPro Quant V4 - True Live Price Tracking & Compounding Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -26,16 +26,16 @@ http.createServer((req, res) => {
 const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = "-1004412694884";
 
-const MAX_TOTAL_ACTIVE_TRADES = 15;
-const MAX_SAME_SIDE_TRADES = 10;
+const MAX_TOTAL_ACTIVE_TRADES = 8;
+const MAX_SAME_SIDE_TRADES = 5;
 
 // ==========================================
 // 2. ADAPTİF PROFİLLER VE SEÇİCİ SEPET (87 PARİTE)
 // ==========================================
 const BASE_PROFILES = {
-    MAJOR: { category: "💎 Majör / Trend Sadık", stochLong: 32, stochShort: 68, atrMultiplier: 1.45, maxLsRatio: 68 },
-    MEME: { category: "🐸 Meme / Ekstrem Volatilite", stochLong: 35, stochShort: 65, atrMultiplier: 1.95, maxLsRatio: 64 },
-    VOLATILE_ALT: { category: "⚡ Sığ Tahta / Yüksek Oynaklık", stochLong: 35, stochShort: 65, atrMultiplier: 1.75, maxLsRatio: 62 }
+    MAJOR: { category: "💎 Majör / Trend Sadık", stochLong: 30, stochShort: 70, atrMultiplier: 1.50, maxLsRatio: 66 },
+    MEME: { category: "🐸 Meme / Ekstrem Volatilite", stochLong: 32, stochShort: 68, atrMultiplier: 2.00, maxLsRatio: 62 },
+    VOLATILE_ALT: { category: "⚡ Sığ Tahta / Yüksek Oynaklık", stochLong: 32, stochShort: 68, atrMultiplier: 1.80, maxLsRatio: 62 }
 };
 
 const COIN_ASSIGNMENTS = {
@@ -1059,7 +1059,7 @@ async function handleSingleTelegramCommand(message) {
             resetPermanentWallet(val);
             return sendTelegramMessage(`💰 <b>KASA BAKİYESİ BAŞARIYLA GÜNCELLENDİ!</b>\n\nSimüle kasa bütçesi <b>$${val.toFixed(2)}</b> olarak ayarlandı ve buluta kaydedildi.\n⏱ <b>${getTurkishTimeString()}</b>`, msgId);
         } else {
-            return sendTelegramMessage(`⚠️ Lütfen geçerli bir tutar yazın. Örnek: <b>/bakiye 1040.04</b> veya <b>/bakiye 1000</b>`, msgId);
+            return sendTelegramMessage(`⚠️ Lütfen geçerli bir tutar yazın. Örnek: <b>/bakiye 1000</b>`, msgId);
         }
     }
 
@@ -1070,11 +1070,11 @@ async function handleSingleTelegramCommand(message) {
 
     if (normTxt === 'sifirla' || normTxt === '/sifirla') {
         resetPermanentWallet(1000);
-        return sendTelegramMessage(`🔄 <b>SİMÜLE KASA $1000 OLARAK SIFIRLANDI!</b>\n⏱ <b>${getTurkishTimeString()}</b>`, msgId);
+        return sendTelegramMessage(`🔄 <b>SİMÜLE KASA $1000 OLARAK SIFIRLANDI!</b>\nGeçmiş hatalı istatistikler temizlendi.\n⏱ <b>${getTurkishTimeString()}</b>`, msgId);
     }
 
     if (normTxt === 'yardim' || normTxt === '/yardim' || normTxt === 'komutlar' || normTxt === '/komutlar') {
-        return sendTelegramMessage(`🤖 <b>KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri anında listeler.\n• <b>/kapat coin</b> : İşlemi kapatır ve kasaya ekler (Örn: <code>/kapat gmx</code> veya <code>/kapat hepsi</code>).\n• <b>/bakiye 1040</b> : Kasayı istediğiniz tutara günceller.\n• <b>/kasa</b> : Bileşik kasa raporunu ve yeni marjin oranlarını gösterir.\n• <b>/yedek</b> : Açık işlemleri ve kasayı buluta yedekler.\n• <b>/karne</b> : Coin performans karnesini gösterir.\n• <b>/karantina</b> : Cezalı coinleri gösterir.\n• <b>/sifirla</b> : Kasayı $1000 yapar.\n• <b>/dip /tepe</b> : Taramalar.`, msgId);
+        return sendTelegramMessage(`🤖 <b>KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri anında listeler.\n• <b>/kapat coin</b> : İşlemi kapatır ve kasaya ekler (Örn: <code>/kapat gmx</code> veya <code>/kapat hepsi</code>).\n• <b>/bakiye 1000</b> : Kasayı istediğiniz tutara günceller.\n• <b>/kasa</b> : Bileşik kasa raporunu ve yeni marjin oranlarını gösterir.\n• <b>/yedek</b> : Açık işlemleri ve kasayı buluta yedekler.\n• <b>/karne</b> : Coin performans karnesini gösterir.\n• <b>/karantina</b> : Cezalı coinleri gösterir.\n• <b>/sifirla</b> : Kasayı $1000 yapar.\n• <b>/dip /tepe</b> : Taramalar.`, msgId);
     }
 
     let targetCoin = null;
@@ -1113,13 +1113,20 @@ async function pollTelegramUpdates() {
 }
 
 // ==========================================
-// 7. İŞLEM TAKİBİ & ŞEFFAF KÜMÜLATİF KASA HAREKETİ
+// 7. CANLI FİYAT (LIVE PRICE) İŞLEM TAKİBİ (SAHTE STOP KORUMALI)
 // ==========================================
-async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow, btc) {
+async function checkActiveTrades(symbol, currentPrice, btc) {
     const trade = activeTrades.get(symbol);
     if (!trade) return;
 
     trade.lastPrice = currentPrice;
+    // İşlem açıldığı andan itibaren görülen gerçek en yüksek ve en düşük canlı fiyatı kaydet
+    if (!trade.highestSeen || currentPrice > trade.highestSeen) trade.highestSeen = currentPrice;
+    if (!trade.lowestSeen || currentPrice < trade.lowestSeen) trade.lowestSeen = currentPrice;
+
+    // Yeni açılan işlemin aynı saniyede tetiklenmemesi için 15 saniye koruma
+    if (Date.now() - trade.time < 15000) return;
+
     const cleanSymbol = symbol.replace('USDT', '');
     const nowTime = getTurkishTimeString();
 
@@ -1130,33 +1137,14 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow, 
             trade.sl = trade.entry;
             saveWalletState();
             await sendTelegramMessage(`⚡🛡️ <b>ACİL BTC ŞOK KORUMASI | #${cleanSymbol}/USDT</b>\nStop giriş seviyesine ($${formatPrice(trade.entry, trade.entry)}) çekildi!`);
+            return;
         }
 
-        if (!trade.tp1Hit && currentHigh >= trade.tp1) {
-            trade.tp1Hit = true;
-            trade.sl = trade.entry;
-            const prevBal = calculateCurrentBalance();
-            const tp1GainPct = ((trade.tp1 - trade.entry) / trade.entry) * 100;
-            const dollarImpact = trade.margin * (tp1GainPct / 100) * trade.leverage;
-            recordTradeEvent('TP1', symbol, dollarImpact);
-            handleTradeResult(symbol, 'TP');
-            const newBal = calculateCurrentBalance();
-
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>TP1 ALINDI! | #${cleanSymbol}/USDT</b>\n💰 <b>Kazanılan:</b> +%${tp1GainPct.toFixed(2)} (<b>+$${dollarImpact.toFixed(2)}</b> | Marjin: $${Number(trade.margin).toFixed(2)})\n💼 <b>Kasa Hareketi:</b> $${prevBal.toFixed(2)} ➔ <b>$${newBal.toFixed(2)}</b>\n🛡️ Stop girişe çekildi (Risk-Free).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-        }
-
-        const midTargetLong = trade.tp1 + ((trade.tp2 - trade.tp1) * 0.5);
-        if (trade.tp1Hit && !trade.trailingHit && currentHigh >= midTargetLong && currentHigh < trade.tp2) {
-            trade.trailingHit = true;
-            trade.sl = trade.tp1;
-            saveWalletState();
-            await sendTelegramMessage(`🔒 <b>KÂR KİLİTLENDİ (İZ SÜREN) | #${cleanSymbol}/USDT</b>\nStop TP1 seviyesine ($${formatPrice(trade.tp1, trade.entry)}) çekildi.`);
-        }
-
-        if (currentHigh >= trade.tp2) {
+        // 1. TP2 KONTROLÜ (Canlı Fiyat üzerinden)
+        if (currentPrice >= trade.tp2) {
             const prevBal = calculateCurrentBalance();
             const tp2GainPct = ((trade.tp2 - trade.entry) / trade.entry) * 100;
-            const prevTp1Pct = ((trade.tp1 - trade.entry) / trade.entry) * 100;
+            const prevTp1Pct = trade.tp1Hit ? (((trade.tp1 - trade.entry) / trade.entry) * 100) : 0;
             const remainingPct = Math.max(0, tp2GainPct - prevTp1Pct);
             const dollarImpact = trade.margin * (remainingPct / 100) * trade.leverage;
 
@@ -1169,19 +1157,45 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow, 
             return;
         }
 
-        if (currentLow <= trade.sl) {
+        // 2. TP1 KONTROLÜ (TP1 alındığında return ile çıkılır, aynı saniyede stop kontrolüne girmez!)
+        if (!trade.tp1Hit && currentPrice >= trade.tp1) {
+            trade.tp1Hit = true;
+            trade.tp1HitTime = Date.now();
+            trade.sl = trade.entry;
+            const prevBal = calculateCurrentBalance();
+            const tp1GainPct = ((trade.tp1 - trade.entry) / trade.entry) * 100;
+            const dollarImpact = trade.margin * (tp1GainPct / 100) * trade.leverage;
+            recordTradeEvent('TP1', symbol, dollarImpact);
+            handleTradeResult(symbol, 'TP');
+            const newBal = calculateCurrentBalance();
+
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>TP1 ALINDI! | #${cleanSymbol}/USDT</b>\n💰 <b>Kazanılan:</b> +%${tp1GainPct.toFixed(2)} (<b>+$${dollarImpact.toFixed(2)}</b> | Marjin: $${Number(trade.margin).toFixed(2)})\n💼 <b>Kasa Hareketi:</b> $${prevBal.toFixed(2)} ➔ <b>$${newBal.toFixed(2)}</b>\n🛡️ Stop girişe çekildi (Risk-Free). İşlem TP2 için devam ediyor!\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            return;
+        }
+
+        // 3. İZ SÜREN STOP KONTROLÜ
+        const midTargetLong = trade.tp1 + ((trade.tp2 - trade.tp1) * 0.5);
+        if (trade.tp1Hit && !trade.trailingHit && currentPrice >= midTargetLong) {
+            trade.trailingHit = true;
+            trade.sl = trade.tp1;
+            saveWalletState();
+            await sendTelegramMessage(`🔒 <b>KÂR KİLİTLENDİ (İZ SÜREN) | #${cleanSymbol}/USDT</b>\nStop TP1 seviyesine ($${formatPrice(trade.tp1, trade.entry)}) çekildi.`);
+            return;
+        }
+
+        // 4. STOP KONTROLÜ (Sadece gerçek canlı fiyat stop seviyesinin altına inerse)
+        if (currentPrice <= trade.sl) {
+            if (trade.tp1Hit && trade.tp1HitTime && (Date.now() - trade.tp1HitTime < 20000)) return;
             let dollarImpact = 0;
             const prevBal = calculateCurrentBalance();
             activeTrades.delete(symbol);
             if (trade.trailingHit) {
-                const slGainPct = ((trade.sl - trade.entry) / trade.entry) * 100;
-                dollarImpact = trade.margin * (slGainPct / 100) * trade.leverage;
-                recordTradeEvent('MANUAL_WIN', symbol, dollarImpact);
-                const newBal = calculateCurrentBalance();
-                await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOP KÂRLI KAPANDI | #${cleanSymbol}/USDT</b>\nKazanılan: +$${dollarImpact.toFixed(2)}\n💼 <b>Kasa Hareketi:</b> $${prevBal.toFixed(2)} ➔ <b>$${newBal.toFixed(2)}</b>\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+                const tp1ToTp2Extra = 0; // TP1 kârı zaten kasaya eklendi
+                saveWalletState();
+                await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOP (TP1 SEVİYESİNDE) KAPANDI | #${cleanSymbol}/USDT</b>\nTP1 kârı korunarak işlem tamamlandı (Kasa: $${prevBal.toFixed(2)}).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else if (trade.tp1Hit || trade.shockProtected) {
                 saveWalletState();
-                await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b> (0 Zarar | Kasa: $${prevBal.toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+                await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b> (0 Ek Zarar | Kasa: $${prevBal.toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
                 const slLossPct = ((trade.sl - trade.entry) / trade.entry) * 100;
                 dollarImpact = trade.margin * (slLossPct / 100) * trade.leverage;
@@ -1201,33 +1215,14 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow, 
             trade.sl = trade.entry;
             saveWalletState();
             await sendTelegramMessage(`⚡🛡️ <b>ACİL BTC ŞOK KORUMASI | #${cleanSymbol}/USDT</b>\nStop giriş seviyesine çekildi.`);
+            return;
         }
 
-        if (!trade.tp1Hit && currentLow <= trade.tp1) {
-            trade.tp1Hit = true;
-            trade.sl = trade.entry;
-            const prevBal = calculateCurrentBalance();
-            const tp1GainPct = ((trade.entry - trade.tp1) / trade.entry) * 100;
-            const dollarImpact = trade.margin * (tp1GainPct / 100) * trade.leverage;
-            recordTradeEvent('TP1', symbol, dollarImpact);
-            handleTradeResult(symbol, 'TP');
-            const newBal = calculateCurrentBalance();
-
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>TP1 ALINDI! | #${cleanSymbol}/USDT</b>\n💰 <b>Kazanılan:</b> +%${tp1GainPct.toFixed(2)} (<b>+$${dollarImpact.toFixed(2)}</b> | Marjin: $${Number(trade.margin).toFixed(2)})\n💼 <b>Kasa Hareketi:</b> $${prevBal.toFixed(2)} ➔ <b>$${newBal.toFixed(2)}</b>\n🛡️ Stop girişe çekildi (Risk-Free).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-        }
-
-        const midTargetShort = trade.tp1 - ((trade.tp1 - trade.tp2) * 0.5);
-        if (trade.tp1Hit && !trade.trailingHit && currentLow <= midTargetShort && currentLow > trade.tp2) {
-            trade.trailingHit = true;
-            trade.sl = trade.tp1;
-            saveWalletState();
-            await sendTelegramMessage(`🔒 <b>KÂR KİLİTLENDİ (İZ SÜREN) | #${cleanSymbol}/USDT</b>`);
-        }
-
-        if (currentLow <= trade.tp2) {
+        // 1. TP2 KONTROLÜ (Canlı Fiyat üzerinden)
+        if (currentPrice <= trade.tp2) {
             const prevBal = calculateCurrentBalance();
             const tp2GainPct = ((trade.entry - trade.tp2) / trade.entry) * 100;
-            const prevTp1Pct = ((trade.entry - trade.tp1) / trade.entry) * 100;
+            const prevTp1Pct = trade.tp1Hit ? (((trade.entry - trade.tp1) / trade.entry) * 100) : 0;
             const remainingPct = Math.max(0, tp2GainPct - prevTp1Pct);
             const dollarImpact = trade.margin * (remainingPct / 100) * trade.leverage;
 
@@ -1240,19 +1235,44 @@ async function checkActiveTrades(symbol, currentPrice, currentHigh, currentLow, 
             return;
         }
 
-        if (currentHigh >= trade.sl) {
+        // 2. TP1 KONTROLÜ (TP1 alındığında return ile çıkılır)
+        if (!trade.tp1Hit && currentPrice <= trade.tp1) {
+            trade.tp1Hit = true;
+            trade.tp1HitTime = Date.now();
+            trade.sl = trade.entry;
+            const prevBal = calculateCurrentBalance();
+            const tp1GainPct = ((trade.entry - trade.tp1) / trade.entry) * 100;
+            const dollarImpact = trade.margin * (tp1GainPct / 100) * trade.leverage;
+            recordTradeEvent('TP1', symbol, dollarImpact);
+            handleTradeResult(symbol, 'TP');
+            const newBal = calculateCurrentBalance();
+
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>TP1 ALINDI! | #${cleanSymbol}/USDT</b>\n💰 <b>Kazanılan:</b> +%${tp1GainPct.toFixed(2)} (<b>+$${dollarImpact.toFixed(2)}</b> | Marjin: $${Number(trade.margin).toFixed(2)})\n💼 <b>Kasa Hareketi:</b> $${prevBal.toFixed(2)} ➔ <b>$${newBal.toFixed(2)}</b>\n🛡️ Stop girişe çekildi (Risk-Free). İşlem TP2 için devam ediyor!\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+            return;
+        }
+
+        // 3. İZ SÜREN STOP KONTROLÜ
+        const midTargetShort = trade.tp1 - ((trade.tp1 - trade.tp2) * 0.5);
+        if (trade.tp1Hit && !trade.trailingHit && currentPrice <= midTargetShort) {
+            trade.trailingHit = true;
+            trade.sl = trade.tp1;
+            saveWalletState();
+            await sendTelegramMessage(`🔒 <b>KÂR KİLİTLENDİ (İZ SÜREN) | #${cleanSymbol}/USDT</b>\nStop TP1 seviyesine ($${formatPrice(trade.tp1, trade.entry)}) çekildi.`);
+            return;
+        }
+
+        // 4. STOP KONTROLÜ (Sadece gerçek canlı fiyat stop seviyesinin üstüne çıkarsa)
+        if (currentPrice >= trade.sl) {
+            if (trade.tp1Hit && trade.tp1HitTime && (Date.now() - trade.tp1HitTime < 20000)) return;
             let dollarImpact = 0;
             const prevBal = calculateCurrentBalance();
             activeTrades.delete(symbol);
             if (trade.trailingHit) {
-                const slGainPct = ((trade.entry - trade.sl) / trade.entry) * 100;
-                dollarImpact = trade.margin * (slGainPct / 100) * trade.leverage;
-                recordTradeEvent('MANUAL_WIN', symbol, dollarImpact);
-                const newBal = calculateCurrentBalance();
-                await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOP KÂRLI KAPANDI | #${cleanSymbol}/USDT</b>\nKazanılan: +$${dollarImpact.toFixed(2)}\n💼 <b>Kasa Hareketi:</b> $${prevBal.toFixed(2)} ➔ <b>$${newBal.toFixed(2)}</b>\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+                saveWalletState();
+                await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOP (TP1 SEVİYESİNDE) KAPANDI | #${cleanSymbol}/USDT</b>\nTP1 kârı korunarak işlem tamamlandı (Kasa: $${prevBal.toFixed(2)}).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else if (trade.tp1Hit || trade.shockProtected) {
                 saveWalletState();
-                await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b> (0 Zarar | Kasa: $${prevBal.toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
+                await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b> (0 Ek Zarar | Kasa: $${prevBal.toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
                 const slLossPct = ((trade.entry - trade.sl) / trade.entry) * 100;
                 dollarImpact = trade.margin * (slLossPct / 100) * trade.leverage;
@@ -1290,7 +1310,7 @@ function canOpenNewTrade(side) {
 }
 
 // ==========================================
-// 8. QUANT TARAMA MOTORU (BİLEŞİK MARJİN + DOĞAL ATR HEDEFLERİ)
+// 8. QUANT V4 TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -1302,7 +1322,8 @@ async function scanMarket() {
 
         for (const symbol of TARGET_COINS) {
             const prof = getCoinProfile(symbol);
-            if (prof.quarantineUntil > Date.now()) continue;
+            const hasOpenTrade = activeTrades.has(symbol);
+            if (!hasOpenTrade && prof.quarantineUntil > Date.now()) continue;
 
             const klines15m = await fetchUniversalKlines(symbol, "15", 55);
             await sleep(10);
@@ -1319,7 +1340,9 @@ async function scanMarket() {
             const currentLow = lows15[lows15.length - 1];
             const currentPrice = closes15[closes15.length - 1];
 
-            await checkActiveTrades(symbol, currentPrice, currentHigh, currentLow, btc);
+            // Açık işlemleri geçmiş 15M mum iğnesiyle değil, doğrudan canlı fiyatla kontrol et!
+            await checkActiveTrades(symbol, currentPrice, btc);
+            if (prof.quarantineUntil > Date.now()) continue;
 
             const stoch15m = calculateStochRSI(closes15);
 
@@ -1390,14 +1413,13 @@ async function scanMarket() {
             const cleanSymbol = symbol.replace('USDT', '');
             let signal = null;
 
-            // DOĞAL ATR VE ADX TABANLI HEDEF HESABI (%1.20 sabit kilidi kaldırıldı, her coinin gerçek volatilitesi kullanılır)
             const isFastRiskFreeMode = adxData.adx < 22 || candleData.isRanging;
             const tp1Mult = isFastRiskFreeMode ? 1.08 : (adxData.isStrongTrend ? 1.32 : 1.20);
             const tp2Mult = isFastRiskFreeMode ? 2.25 : (adxData.isStrongTrend ? 2.75 : 2.50);
 
-            const rawAtrDist = atr15 ? (atr15 * prof.atrMultiplier) : (currentPrice * 0.011);
-            const minSafeDist = currentPrice * 0.0045; // %0.45 mikro koruma
-            const maxSafeDist = currentPrice * 0.0280; // %2.80 tavan koruma
+            const rawAtrDist = atr15 ? (atr15 * prof.atrMultiplier) : (currentPrice * 0.012);
+            const minSafeDist = currentPrice * 0.0065; // %0.65 minimum gerçekçi stop mesafesi
+            const maxSafeDist = currentPrice * 0.0280; // %2.80 maksimum stop mesafesi
             const stopDist = Math.min(maxSafeDist, Math.max(minSafeDist, rawAtrDist));
 
             if (isPotentialLong && lsData.longPct < prof.maxLsRatio) {
@@ -1427,23 +1449,22 @@ async function scanMarket() {
             }
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
-            if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 20 * 60 * 1000)) {
+            if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 45 * 60 * 1000)) {
                 const quality = evaluateSignalQuality(signal.side, stoch15m, volData, lsData, candleData, smc, adxData, sweepData, oiData, rsStrong);
 
-                // BİLEŞİK (COMPOUND) YÜZDELİK MARJİN HESABI (O anki güncel kasa üzerinden)
                 const liveWalletBalance = calculateCurrentBalance();
                 let leverage = 10;
                 let marginPct = 5;
 
                 if (quality.qualityTier === 5) {
                     leverage = 14;
-                    marginPct = 10; // Güncel kasanın %10'u
+                    marginPct = 10;
                 } else if (quality.qualityTier === 4) {
                     leverage = 12;
-                    marginPct = 7.5; // Güncel kasanın %7.5'i
+                    marginPct = 7.5;
                 } else {
                     leverage = 9;
-                    marginPct = 5; // Güncel kasanın %5'i
+                    marginPct = 5;
                 }
 
                 const margin = parseFloat(((liveWalletBalance * marginPct) / 100).toFixed(2));
@@ -1453,6 +1474,8 @@ async function scanMarket() {
                     side: signal.side, 
                     entry: signal.rawEntry, 
                     lastPrice: currentPrice,
+                    highestSeen: currentPrice,
+                    lowestSeen: currentPrice,
                     sl: signal.rawSl, 
                     tp1: signal.rawTp1, 
                     tp2: signal.rawTp2, 
@@ -1478,7 +1501,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda" : "⚪ Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n☁️ Bulut Hafıza & Bileşik Kasa: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /kapat | /bakiye <miktar> | /yedek | /kasa | /karne</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n☁️ Bulut Hafıza & Canlı Fiyat Takibi: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /kapat | /bakiye <miktar> | /sifirla | /yedek | /kasa | /karne</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -1488,16 +1511,16 @@ async function scanMarket() {
 // 9. ANA ÇALIŞTIRICI & OTOMATİK BULUT GERİ YÜKLEME
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Quant V3 (Compounding & Natural ATR) Başlatılıyor...");
+    console.log("🚀 ScalpPro Quant V4 (True Live Price & Compounding) Başlatılıyor...");
     await initTelegramOffset();
     const restored = await restoreFromTelegramCloudOnStartup();
 
     if (restored) {
         const curBal = calculateCurrentBalance();
-        await sendTelegramMessage(`☁️🔄 <b>QUANT V3 GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n📈 <b>Yeni Bileşik Marjinler:</b> %5 ($${(curBal * 0.05).toFixed(2)}) | %7.5 ($${(curBal * 0.075).toFixed(2)}) | %10 ($${(curBal * 0.10).toFixed(2)})\n🎯 <b>Doğal ATR Hedefleri:</b> Sabit %1.26 kilidi kaldırıldı, her coine özel gerçek ATR yüzdesi aktif!`);
+        await sendTelegramMessage(`☁️🔄 <b>QUANT V4 GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n🛡️ <b>Yeni V4 Koruması:</b> Geçmiş 15M mum iğnelerinden kaynaklanan sahte stoplar ve TP1 sonrası erken kapanma hatası giderildi!\n💡 <i>Geçmiş hatalı stop istatistiklerini temizleyip $1000 ile sıfırdan başlamak isterseniz <b>/sifirla</b> yazabilirsiniz.</i>`);
     } else {
         await syncStateToTelegramCloud();
-        await sendTelegramMessage(`💎⚡ <b>QUANT V3: BİLEŞİK MARJİN & DOĞAL ATR AKTİF!</b>\n\n1️⃣ <b>Bileşik (Kümülatif) Marjin:</b> Kasa büyüdükçe yeni işlemlere girilen marjin de güncel kasanın %5 / %7.5 / %10'u olarak otomatik büyür.\n2️⃣ <b>Doğal ATR Hedefleri:</b> Her coin kendi volatilitesine özgü gerçek TP1 ve Stop yüzdesi üretir.\n3️⃣ <b>Şeffaf Kasa Geçişi:</b> Her işlemde <code>Önceki Kasa ➔ Yeni Kasa</code> hareketi net olarak gösterilir.`);
+        await sendTelegramMessage(`💎⚡ <b>QUANT V4: GERÇEK CANLI FİYAT TAKİBİ & BİLEŞİK MARJİN AKTİF!</b>\n\n1️⃣ <b>Sahte Stop Koruması:</b> Geçmiş 15M mum iğneleri yerine doğrudan canlı fiyat (Live Price) takip edilir.\n2️⃣ <b>TP2 Koruması:</b> TP1 olan işlemler aynı saniyede girişten kapanmaz, TP2'ye gitmesi için alan tanınır.\n3️⃣ <b>Bileşik Marjin:</b> Güncel kasanın %5 / %7.5 / %10'u ile işlem açılır.`);
     }
 
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1200); } })();
