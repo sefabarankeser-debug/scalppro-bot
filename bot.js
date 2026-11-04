@@ -18,7 +18,7 @@ const zlib = require('zlib');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Quant V6 - BTC Dominance Money Flow & L/S Size Active\n');
+    res.end('ScalpPro Quant V6 Pro - Smart Cache, Dominance & L/S Size Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -70,6 +70,7 @@ const COIN_ASSIGNMENTS = {
 };
 
 const dynamicCoinMemory = new Map();
+const klineCache = new Map(); // Akıllı Mum Önbelleği (Veri bulunamadı hatasını önler)
 
 function getCoinProfile(symbol) {
     if (!dynamicCoinMemory.has(symbol)) {
@@ -236,8 +237,10 @@ loadWalletState();
 
 const TARGET_COINS = Object.keys(COIN_ASSIGNMENTS);
 const FUZZY_MAP = {
-    "DMY": "DYM", "PEP": "PEPE", "SHIBA": "SHIB", "DOG": "DOGE", "FLOK": "FLOKI",
-    "BON": "BONK", "LNK": "LINK", "AVX": "AVAX", "NOTC": "NOT", "STR": "STRK", "APTOS": "APT", "POL": "POL", "TRX": "TRX", "HYPE": "HYPE", "ZEC": "ZEC"
+    "DMY": "DYM", "PEP": "1000PEPE", "PEPE": "1000PEPE", "SHIBA": "1000SHIB", "SHIB": "1000SHIB",
+    "DOG": "DOGE", "FLOK": "1000FLOKI", "FLOKI": "1000FLOKI", "BON": "1000BONK", "BONK": "1000BONK",
+    "LNK": "LINK", "AVX": "AVAX", "NOTC": "NOT", "STR": "STRK", "APTOS": "APT", "POL": "POL",
+    "MATIC": "POL", "RNDR": "RENDER", "ASI": "FET", "TRX": "TRX", "HYPE": "HYPE", "ZEC": "ZEC"
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -310,7 +313,7 @@ function getActiveSessionName() {
 // ==========================================
 function fetchJSON(url, customHeaders = {}, timeoutMs = 8000) {
     return new Promise((resolve, reject) => {
-        const headers = Object.assign({ 'User-Agent': 'Mozilla/5.0' }, customHeaders);
+        const headers = Object.assign({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }, customHeaders);
         const req = https.get(url, { headers, timeout: timeoutMs }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
@@ -407,7 +410,6 @@ async function restoreFromTelegramCloudOnStartup() {
 let cachedGlobalDom = { btcDom: 56.5, ethDom: 13.5, mcapChange24h: 0, updatedAt: 0 };
 
 async function checkDominanceCondition(btcTrend = "NEUTRAL") {
-    // 1. CoinGecko Global Market Cap Üzerinden Gerçek BTC.D ve ETH.D Yüzdesi (3 dk önbellekli)
     if (Date.now() - cachedGlobalDom.updatedAt > 3 * 60 * 1000) {
         try {
             const gRes = await fetchJSON("https://api.coingecko.com/api/v3/global", {}, 5000);
@@ -420,7 +422,6 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
         } catch (e) {}
     }
 
-    // 2. Binance Futures BTCDOMUSDT (Canlı Dominans Endeksi) 15M & 1H Momentum Takibi
     let domChange15m = 0;
     let domChange1h = 0;
     let domIndexPrice = 0;
@@ -482,20 +483,27 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
 
 async function fetchLongShortSizeData(symbol, currentPrice) {
     try {
-        const url = `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=5min&limit=1`;
-        const json = await fetchJSON(url, {}, 5000);
-        
-        const ratioUrl = `https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=${symbol}&period=1h&limit=1`;
-        const ratioJson = await fetchJSON(ratioUrl, {}, 5000);
+        const [json, ratioJson] = await Promise.all([
+            fetchJSON(`https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=5min&limit=1`, {}, 5000).catch(() => null),
+            fetchJSON(`https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=${symbol}&period=1h&limit=1`, {}, 5000).catch(() => null)
+        ]);
 
         let longPct = 50, shortPct = 50;
-        if (ratioJson.retCode === 0 && ratioJson.result?.list?.length > 0) {
+        if (ratioJson && ratioJson.retCode === 0 && ratioJson.result?.list?.length > 0) {
             longPct = Math.round(parseFloat(ratioJson.result.list[0].buyRatio) * 100);
             shortPct = Math.round(parseFloat(ratioJson.result.list[0].sellRatio) * 100);
+        } else {
+            try {
+                const bData = await fetchJSON(`https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=1h&limit=1`, {}, 4500);
+                if (Array.isArray(bData) && bData.length > 0) {
+                    longPct = Math.round(parseFloat(bData[0].longAccount) * 100);
+                    shortPct = Math.round(parseFloat(bData[0].shortAccount) * 100);
+                }
+            } catch (e) {}
         }
 
         let totalOIUSD = 1500000;
-        if (json.retCode === 0 && json.result?.list?.length > 0) {
+        if (json && json.retCode === 0 && json.result?.list?.length > 0) {
             const oiCoin = parseFloat(json.result.list[0].openInterest || "0");
             if (oiCoin > 0 && currentPrice > 0) {
                 totalOIUSD = oiCoin * currentPrice;
@@ -527,7 +535,7 @@ async function fetchLongShortSizeData(symbol, currentPrice) {
 async function fetchFundingRate(symbol) {
     try {
         const url = `https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`;
-        const json = await fetchJSON(url);
+        const json = await fetchJSON(url, {}, 5000);
         if (json.retCode === 0 && json.result?.list?.length > 0) {
             const rateRaw = parseFloat(json.result.list[0].fundingRate || "0");
             const ratePct = rateRaw * 100;
@@ -822,24 +830,75 @@ function calculateATR(highs, lows, closes, period = 14) {
     return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
 }
 
-async function fetchUniversalKlines(symbol, interval, limit) {
-    try {
-        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`;
-        const json = await fetchJSON(url, {}, 6000);
-        if (json.retCode === 0 && json.result?.list?.length >= 20) return json.result.list.slice().reverse();
-    } catch (e) {}
-    try {
-        const binanceInt = interval === "15" ? "15m" : (interval === "60" ? "1h" : (interval === "240" ? "4h" : interval));
-        const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${binanceInt}&limit=${limit}`;
-        const data = await fetchJSON(url, {}, 6000);
-        if (Array.isArray(data) && data.length >= 20) return data.map(k => [k[0], k[1], k[2], k[3], k[4], k[5]]);
-    } catch (e) {}
+// ==========================================
+// 4 KATMANLI YEDEK VERİ HATTI + AKILLI ÖNBELLEK (RATE LIMIT KORUMASI)
+// ==========================================
+async function fetchUniversalKlines(symbol, interval, limit, allowCacheFallback = true) {
+    const cacheKey = `${symbol}_${interval}`;
+    const minRequired = Math.min(limit, 20);
+    const binanceInt = interval === "15" ? "15m" : (interval === "60" ? "1h" : (interval === "240" ? "4h" : interval));
+    const spotSym = symbol.startsWith("1000") ? symbol.replace(/^1000/, "") : symbol;
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        // 1. Katman: Bybit V5 Linear Futures
+        try {
+            const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${interval}&limit=${limit}`;
+            const json = await fetchJSON(url, {}, 5500);
+            if (json && json.retCode === 0 && json.result?.list?.length >= minRequired) {
+                const res = json.result.list.slice().reverse();
+                klineCache.set(cacheKey, { data: res, ts: Date.now() });
+                return res;
+            }
+        } catch (e) {}
+
+        // 2. Katman: Binance Futures (FAPI)
+        try {
+            const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${binanceInt}&limit=${limit}`;
+            const data = await fetchJSON(url, {}, 5500);
+            if (Array.isArray(data) && data.length >= minRequired) {
+                const res = data.map(k => [k[0], k[1], k[2], k[3], k[4], k[5]]);
+                klineCache.set(cacheKey, { data: res, ts: Date.now() });
+                return res;
+            }
+        } catch (e) {}
+
+        // 3. Katman: Binance Vision Resmi Veri Sunucusu (Bulut Sunuculara Asla Rate Limit Koymaz)
+        try {
+            const url = `https://data-api.binance.vision/api/v3/klines?symbol=${spotSym}&interval=${binanceInt}&limit=${limit}`;
+            const data = await fetchJSON(url, {}, 5500);
+            if (Array.isArray(data) && data.length >= minRequired) {
+                const is1000 = symbol.startsWith("1000") && !spotSym.startsWith("1000");
+                const mult = is1000 ? 1000 : 1;
+                const res = data.map(k => [
+                    k[0],
+                    String(parseFloat(k[1]) * mult),
+                    String(parseFloat(k[2]) * mult),
+                    String(parseFloat(k[3]) * mult),
+                    String(parseFloat(k[4]) * mult),
+                    k[5]
+                ]);
+                klineCache.set(cacheKey, { data: res, ts: Date.now() });
+                return res;
+            }
+        } catch (e) {}
+
+        if (attempt === 1) await sleep(250);
+    }
+
+    // 4. Katman: Akıllı Önbellek (Cache) Yedeği
+    if (allowCacheFallback && klineCache.has(cacheKey)) {
+        const cached = klineCache.get(cacheKey);
+        if (Date.now() - cached.ts <= 15 * 60 * 1000 && cached.data.length >= minRequired) {
+            return cached.data;
+        }
+    }
+
     return null;
 }
 
 async function fetchLivePrice(symbol, fallbackPrice) {
     try {
-        const k = await fetchUniversalKlines(symbol, "15", 2);
+        const k = await fetchUniversalKlines(symbol, "15", 2, true);
         if (k && k.length > 0) return parseFloat(k[k.length - 1][4]);
     } catch (e) {}
     return fallbackPrice;
@@ -1066,22 +1125,27 @@ async function sendWalletReport(replyToId = null) {
 
 async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     let clean = normalizeCommandText(rawSymbol).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if ( clean.endsWith('USDT') ) clean = clean.replace(/USDT$/, '');
     if (FUZZY_MAP[clean]) clean = FUZZY_MAP[clean];
-    if (!clean.endsWith('USDT')) clean += 'USDT';
+    const baseSym = clean + 'USDT';
 
-    let symbol = clean;
-    let klines15m = await fetchUniversalKlines(symbol, "15", 55);
-    if (!klines15m && !symbol.startsWith('1000')) {
-        symbol = '1000' + clean;
-        klines15m = await fetchUniversalKlines(symbol, "15", 55);
+    let symbol = baseSym;
+    let klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
+    if ((!klines15m || klines15m.length < 25) && !symbol.startsWith('1000')) {
+        symbol = '1000' + baseSym;
+        klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
     }
-    if (!klines15m || klines15m.length < 35) return sendTelegramMessage(`⚠️ <b>#${clean}</b> için veri bulunamadı.`, replyToId);
+    if (!klines15m || klines15m.length < 25) {
+        return sendTelegramMessage(`⚠️ <b>#${baseSym}</b> için borsalardan şu an yanıt alınamadı, lütfen 5 saniye sonra tekrar deneyin.`, replyToId);
+    }
     
+    const currentPrice = parseFloat(klines15m[klines15m.length - 1][4]);
+
     const [klines1h, klines4h, fundingData, lsSizeData, oiData, domData] = await Promise.all([
-        fetchUniversalKlines(symbol, "60", 55),
-        fetchUniversalKlines(symbol, "240", 55),
+        fetchUniversalKlines(symbol, "60", 55, true),
+        fetchUniversalKlines(symbol, "240", 55, true),
         fetchFundingRate(symbol),
-        fetchLongShortSizeData(symbol, parseFloat(klines15m[klines15m.length - 1][4])),
+        fetchLongShortSizeData(symbol, currentPrice),
         fetchOpenInterestData(symbol),
         checkDominanceCondition()
     ]);
@@ -1089,18 +1153,17 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     const highs15 = klines15m.map(k => parseFloat(k[2]));
     const lows15 = klines15m.map(k => parseFloat(k[3]));
     const closes15 = klines15m.map(k => parseFloat(k[4]));
-    const currentPrice = closes15[closes15.length - 1];
     const stoch15m = calculateStochRSI(closes15);
     const volData = analyze15MVolume(klines15m);
     const smc = detectSmartMoneyStructure(klines15m);
     const adxData = calculateADX(highs15, lows15, closes15);
     const sweepData = detectLiquiditySweep(klines15m);
     
-    let rsi1h = "N/A", ema50_1h = null;
-    if (klines1h) {
+    let rsi1h = 50, ema50_1h = currentPrice;
+    if (klines1h && klines1h.length >= 20) {
         const closes1h = klines1h.map(k => parseFloat(k[4]));
         rsi1h = Math.round(calculateRSI(closes1h, 14));
-        ema50_1h = calculateEMA(closes1h, 50) || calculateEMA(closes1h, 20);
+        ema50_1h = calculateEMA(closes1h, 50) || calculateEMA(closes1h, 20) || currentPrice;
     }
 
     const isBull1H = (currentPrice >= ema50_1h * 0.990 || rsi1h >= 42);
@@ -1110,7 +1173,15 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     const candleData = analyze4HCandles(klines4h);
     let crossText = stoch15m.bullCross ? "🟢 Yukarı Kesişim" : stoch15m.bearCross ? "🔴 Aşağı Kesişim" : "⏳ Kesişim Bekleniyor";
 
-    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>\n\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Trend:</b> ${trendText} (RSI: ${rsi1h})\n📐 <b>Trend Gücü (ADX):</b> ${adxData.badge}\n⚡ <b>15M Stoch:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d} (${crossText})\n📊 <b>Hacim:</b> ${volData.badge}\n🐋 <b>Açık Pozisyon (OI):</b> ${oiData.badge}\n🏛️ <b>SMC:</b> ${smc.smcBadge}\n🧲 <b>Likidite:</b> ${sweepData.badge}\n👑 <b>Dominans Akışı:</b> ${domData.badge}\n💸 <b>Funding:</b> ${fundingData.text}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+    let openTradeNote = "";
+    if (activeTrades.has(symbol)) {
+        const t = activeTrades.get(symbol);
+        const pnlPct = t.side === 'LONG' ? (((currentPrice - t.entry) / t.entry) * 100) : (((t.entry - currentPrice) / t.entry) * 100);
+        const sign = pnlPct >= 0 ? "+" : "";
+        openTradeNote = `\n📂 <b>Açık İşlem Durumu:</b> ${t.side} | Giriş: $${formatPrice(t.entry, t.entry)} | PNL: <b>${sign}%${pnlPct.toFixed(2)}</b> (Marjin: $${Number(t.margin).toFixed(2)})\n`;
+    }
+
+    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>${openTradeNote}\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Trend:</b> ${trendText} (RSI: ${rsi1h})\n📐 <b>Trend Gücü (ADX):</b> ${adxData.badge}\n⚡ <b>15M Stoch:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d} (${crossText})\n📊 <b>Hacim:</b> ${volData.badge}\n🐋 <b>Açık Pozisyon (OI):</b> ${oiData.badge}\n🏛️ <b>SMC:</b> ${smc.smcBadge}\n🧲 <b>Likidite:</b> ${sweepData.badge}\n👑 <b>Dominans Akışı:</b> ${domData.badge}\n💸 <b>Funding:</b> ${fundingData.text}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
@@ -1119,9 +1190,9 @@ async function scanExtremes(type, replyToId = null) {
     const valid = [];
     for (const sym of TARGET_COINS.slice(0, 45)) {
         try {
-            const k15 = await fetchUniversalKlines(sym, "15", 50);
-            await sleep(8);
-            if (!k15 || k15.length < 35) continue;
+            const k15 = await fetchUniversalKlines(sym, "15", 50, true);
+            await sleep(15);
+            if (!k15 || k15.length < 30) continue;
             const closes = k15.map(k => parseFloat(k[4]));
             const stoch = calculateStochRSI(closes);
             const cur = closes[closes.length - 1];
@@ -1414,7 +1485,7 @@ function canOpenNewTrade(side) {
 }
 
 // ==========================================
-// 8. QUANT V6 TARAMA MOTORU (8 KURUMSAL FİLTRE + DOMİNANS AKIŞI)
+// 8. QUANT V6 PRO TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -1430,8 +1501,8 @@ async function scanMarket() {
             const hasOpenTrade = activeTrades.has(symbol);
             if (!hasOpenTrade && prof.quarantineUntil > Date.now()) continue;
 
-            const klines15m = await fetchUniversalKlines(symbol, "15", 55);
-            await sleep(10);
+            const klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
+            await sleep(35); // API Rate Limit koruması için optimize nefes payı
             if (!klines15m || klines15m.length < 40) continue;
             scannedCount++;
 
@@ -1471,7 +1542,6 @@ async function scanMarket() {
             const smc = detectSmartMoneyStructure(klines15m);
             const sweepData = detectLiquiditySweep(klines15m);
 
-            // MAKRO DOMİNANS KALKANI: BTC Dominansı sert yükselirken (altcoinler ezilirken) sıradan altcoin Long'larını engelle!
             const isAltcoin = symbol !== "BTCUSDT" && symbol !== "ETHUSDT";
             if (isAltcoin && isPotentialLong && domData.blockAltLongs) {
                 const hasAPlusReversal = sweepData.bullSweep && (smc.hasOB || smc.hasFVG) && volData.isSpike;
@@ -1486,8 +1556,8 @@ async function scanMarket() {
             const desiredSide = isPotentialLong ? 'LONG' : 'SHORT';
             if (!canOpenNewTrade(desiredSide)) continue;
 
-            const klines1h = await fetchUniversalKlines(symbol, "60", 55);
-            const klines4h = await fetchUniversalKlines(symbol, "240", 55);
+            const klines1h = await fetchUniversalKlines(symbol, "60", 55, true);
+            const klines4h = await fetchUniversalKlines(symbol, "240", 55, true);
             if (!klines1h || klines1h.length < 25) continue;
 
             const closes1h = klines1h.map(k => parseFloat(k[4]));
@@ -1612,7 +1682,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda" : "⚪ Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & L/S Size: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & Akıllı Önbellek: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -1622,17 +1692,17 @@ async function scanMarket() {
 // 9. ANA ÇALIŞTIRICI & OTOMATİK BULUT GERİ YÜKLEME
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Quant V6 (BTC Dominance Money Flow & L/S Size) Başlatılıyor...");
+    console.log("🚀 ScalpPro Quant V6 Pro (Smart Cache & Dominance) Başlatılıyor...");
     await initTelegramOffset();
     const restored = await restoreFromTelegramCloudOnStartup();
     const domInit = await checkDominanceCondition();
 
     if (restored) {
         const curBal = calculateCurrentBalance();
-        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n💡 <i>Anlık para akışı detayları için <b>/dominans</b> yazabilirsiniz.</i>`);
+        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n⚡ <b>Akıllı Önbellek (Smart Cache):</b> Coin analizlerinde "veri bulunamadı" hatasını önleyen 4 katmanlı veri hattı devreye alındı!`);
     } else {
         await syncStateToTelegramCloud();
-        await sendTelegramMessage(`💎⚡ <b>QUANT V6: MAKRO DOMİNANS AKIŞI & L/S DOLAR BÜYÜKLÜĞÜ AKTİF!</b>\n\n1️⃣ <b>Çift Motorlu Dominans (BTC.D + BTCDOMUSDT):</b> Dominans hızla yükselirken altcoinlerin ezilmesini önlemek için sıradan Long sinyallerini filtreler; dominans düşerken altcoin rallilerini yakalar.\n2️⃣ <b>Yeni Komut:</b> <code>/dominans</code> veya <code>/dom</code> yazarak para akış yönünü anında görebilirsiniz.`);
+        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: AKILLI ÖNBELLEK & MAKRO DOMİNANS AKTİF!</b>\n\n1️⃣ <b>4 Katmanlı Veri Hattı + Smart Cache:</b> Coin sorgularında anlık API kesintilerinde bile önbellekten kesintisiz analiz sunar.\n2️⃣ <b>Çift Motorlu Dominans:</b> <code>/dominans</code> komutu ile para akışı canlı izlenir.`);
     }
 
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1200); } })();
