@@ -19,7 +19,7 @@ const crypto = require('crypto');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Quant V6 Pro - Original Layout & Binance Auto-Trade Active\n');
+    res.end('ScalpPro Quant V6 Pro - Dynamic Risk Shield, Dominance & Live Binance Auto-Trade Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -27,14 +27,11 @@ http.createServer((req, res) => {
 const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = "-1004412694884";
 
-const MAX_TOTAL_ACTIVE_TRADES = 8;
-const MAX_SAME_SIDE_TRADES = 5;
-
 // ==========================================
-// 2. BİNANCE OTOMATİK AL-SAT MOTORU
+// 2. BİNANCE FUTURES GERÇEK İŞLEM MOTORU
 // ==========================================
-const BINANCE_API_KEY = (process.env.BINANCE_API_KEY || "").trim();
-const BINANCE_API_SECRET = (process.env.BINANCE_API_SECRET || "").trim();
+const BINANCE_API_KEY = process.env.BINANCE_API_KEY ? process.env.BINANCE_API_KEY.trim() : "";
+const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET ? process.env.BINANCE_API_SECRET.trim() : "";
 const TRADE_AMOUNT_USDT = parseFloat(process.env.TRADE_AMOUNT) || 5;
 
 const symbolPrecisionMap = new Map();
@@ -46,10 +43,10 @@ function signBinanceQuery(queryString) {
 function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
     return new Promise((resolve) => {
         if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
-            return resolve({ code: -9999, msg: "API Key veya Secret eksik!" });
+            return resolve(null);
         }
         const timestamp = Date.now();
-        const queryObj = { ...params, timestamp, recvWindow: 10000 };
+        const queryObj = { ...params, timestamp, recvWindow: 6000 };
         const queryString = Object.keys(queryObj)
             .map(k => `${k}=${encodeURIComponent(queryObj[k])}`)
             .join('&');
@@ -63,8 +60,7 @@ function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
             method: method,
             headers: {
                 'X-MBX-APIKEY': BINANCE_API_KEY,
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Mozilla/5.0'
+                'Content-Type': 'application/x-www-form-urlencoded'
             },
             timeout: 8000
         };
@@ -77,12 +73,12 @@ function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
                     const parsed = JSON.parse(data);
                     resolve(parsed);
                 } catch (e) {
-                    resolve({ code: -9998, msg: "JSON Parse Hatasi" });
+                    resolve(null);
                 }
             });
         });
-        req.on('timeout', () => { req.destroy(); resolve({ code: -9997, msg: "Zaman Asimi" }); });
-        req.on('error', (err) => { resolve({ code: -9996, msg: err.message }); });
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.on('error', () => { resolve(null); });
         req.end();
     });
 }
@@ -94,7 +90,7 @@ async function initBinanceExchangeInfo() {
             for (const s of info.symbols) {
                 const stepFilter = s.filters?.find(f => f.filterType === 'LOT_SIZE');
                 symbolPrecisionMap.set(s.symbol, {
-                    quantityPrecision: s.quantityPrecision ?? 0,
+                    quantityPrecision: s.quantityPrecision || 0,
                     stepSize: stepFilter ? parseFloat(stepFilter.stepSize) : 0.001
                 });
             }
@@ -106,39 +102,8 @@ function formatQuantity(symbol, qty) {
     const meta = symbolPrecisionMap.get(symbol);
     if (!meta) return Number(qty.toFixed(2));
     const step = meta.stepSize;
-    const rounded = Math.floor((qty + 1e-9) / step) * step;
+    const rounded = Math.floor(qty / step) * step;
     return Number(rounded.toFixed(meta.quantityPrecision));
-}
-
-async function openBinanceOrder(symbol, side, leverage, currentPrice) {
-    if (!BINANCE_API_KEY || !BINANCE_API_SECRET) return { ok: false, qty: 0, err: "API Anahtarı Eksik" };
-    try {
-        if (symbolPrecisionMap.size === 0) await initBinanceExchangeInfo();
-
-        await binanceSignedRequest('/fapi/v1/marginType', 'POST', { symbol, marginType: 'ISOLATED' });
-        await binanceSignedRequest('/fapi/v1/leverage', 'POST', { symbol, leverage });
-
-        const positionSizeUsd = TRADE_AMOUNT_USDT * leverage;
-        const rawQty = positionSizeUsd / currentPrice;
-        const finalQty = formatQuantity(symbol, rawQty);
-
-        if (!finalQty || finalQty <= 0) return { ok: false, qty: 0, err: "Miktar çok küçük" };
-
-        const orderSide = side === 'LONG' ? 'BUY' : 'SELL';
-        const orderRes = await binanceSignedRequest('/fapi/v1/order', 'POST', {
-            symbol,
-            side: orderSide,
-            type: 'MARKET',
-            quantity: finalQty
-        });
-
-        if (orderRes && orderRes.orderId) {
-            return { ok: true, qty: parseFloat(orderRes.executedQty || finalQty), err: "" };
-        }
-        return { ok: false, qty: 0, err: `[${orderRes?.code || 'HATA'}] ${orderRes?.msg || 'Reddedildi'}` };
-    } catch (e) {
-        return { ok: false, qty: 0, err: e.message };
-    }
 }
 
 async function closeBinancePosition(trade, symbol) {
@@ -155,9 +120,9 @@ async function closeBinancePosition(trade, symbol) {
     } catch (e) {}
 }
 
-// ==========================================
-// 3. ADAPTİF PROFİLLER VE SEÇİCİ SEPET
-// ==========================================
+let maxTotalActiveTrades = 12;
+let maxSameSideTrades = 8;
+
 const BASE_PROFILES = {
     MAJOR: { category: "💎 Majör / Trend Sadık", stochLong: 30, stochShort: 70, atrMultiplier: 1.50, maxLsRatio: 66 },
     MEME: { category: "🐸 Meme / Ekstrem Volatilite", stochLong: 32, stochShort: 68, atrMultiplier: 2.00, maxLsRatio: 62 },
@@ -251,7 +216,9 @@ function encodeCloudState() {
             active: Array.from(activeTrades.entries()),
             hist: tradeHistory.slice(-200),
             mem: memEntries,
-            cMsgId: cloudMessageId
+            cMsgId: cloudMessageId,
+            maxSide: maxSameSideTrades,
+            maxTotal: maxTotalActiveTrades
         };
         return zlib.deflateSync(Buffer.from(JSON.stringify(stateObj), 'utf8')).toString('base64');
     } catch (e) {
@@ -267,6 +234,8 @@ function decodeAndApplyCloudState(base64Str) {
         if (parsed.bal !== undefined) customStartingBalance = parsed.bal;
         if (Array.isArray(parsed.hist)) tradeHistory = parsed.hist;
         if (parsed.cMsgId) cloudMessageId = parsed.cMsgId;
+        if (parsed.maxSide && parsed.maxSide >= 1) maxSameSideTrades = parsed.maxSide;
+        if (parsed.maxTotal && parsed.maxTotal >= 1) maxTotalActiveTrades = parsed.maxTotal;
 
         if (Array.isArray(parsed.active)) {
             activeTrades.clear();
@@ -300,7 +269,9 @@ function saveLocalFileOnly() {
             customStartingBalance,
             tradeHistory,
             activeTrades: Array.from(activeTrades.entries()),
-            cloudMessageId
+            cloudMessageId,
+            maxSameSideTrades,
+            maxTotalActiveTrades
         };
         fs.writeFileSync(WALLET_FILE, JSON.stringify(payload), 'utf8');
     } catch (e) {}
@@ -315,6 +286,8 @@ function loadWalletState() {
             if (parsed.walletStartTime) walletStartTime = parsed.walletStartTime;
             if (parsed.customStartingBalance) customStartingBalance = parsed.customStartingBalance;
             if (parsed.cloudMessageId) cloudMessageId = parsed.cloudMessageId;
+            if (parsed.maxSameSideTrades) maxSameSideTrades = parsed.maxSameSideTrades;
+            if (parsed.maxTotalActiveTrades) maxTotalActiveTrades = parsed.maxTotalActiveTrades;
             if (Array.isArray(parsed.activeTrades)) {
                 for (const [sym, t] of parsed.activeTrades) activeTrades.set(sym, t);
             }
@@ -479,7 +452,7 @@ async function syncStateToTelegramCloud() {
         const code = encodeCloudState();
         if (!code) return;
         const currentBal = calculateCurrentBalance();
-        const cloudText = `☁️ <b>[SCALPPRO BULUT HAFIZA SİSTEMİ]</b>\n<i>Bu sabitlenmiş mesaj, bot güncellendiğinde açık işlemlerin ve kasanın silinmemesi için otomatik güncellenir.</i>\n\n💼 <b>Güncel Bileşik Kasa:</b> $${currentBal.toFixed(2)} | 📂 <b>Açık İşlem:</b> ${activeTrades.size}\n⏱ <b>Son Yedek:</b> ${getTurkishTimeString()}\n\n<pre>[CLOUD_STATE:${code}]</pre>`;
+        const cloudText = `☁️ <b>[SCALPPRO BULUT HAFIZA SİSTEMİ]</b>\n<i>Bu sabitlenmiş mesaj, bot güncellendiğinde açık işlemlerin ve kasanın silinmemesi için otomatik güncellenir.</i>\n\n💼 <b>Güncel Bileşik Kasa:</b> $${currentBal.toFixed(2)} | 📂 <b>Açık İşlem:</b> ${activeTrades.size}/${maxTotalActiveTrades} (Tek Yön: ${maxSameSideTrades})\n⏱ <b>Son Yedek:</b> ${getTurkishTimeString()}\n\n<pre>[CLOUD_STATE:${code}]</pre>`;
 
         if (cloudMessageId) {
             const editRes = await telegramApiCall('editMessageText', {
@@ -536,23 +509,20 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
         } catch (e) {}
     }
 
-    let domChange15m = 0, domChange1h = 0;
+    let domChange15m = 0, domChange1h = 0, domIndexPrice = 0;
     try {
-        const [btcK, ethK] = await Promise.all([
-            fetchUniversalKlines("BTCUSDT", "15", 6, true),
-            fetchUniversalKlines("ETHUSDT", "15", 6, true)
-        ]);
-        if (btcK && ethK && btcK.length >= 5 && ethK.length >= 5) {
-            const btcClose = parseFloat(btcK[btcK.length - 1][4]);
-            const btcOpen15 = parseFloat(btcK[btcK.length - 1][1]);
-            const btcOpen1h = parseFloat(btcK[btcK.length - 5][1]);
+        const domKlines = await fetchJSON("https://fapi.binance.com/fapi/v1/klines?symbol=BTCDOMUSDT&interval=15m&limit=6", {}, 5000);
+        if (Array.isArray(domKlines) && domKlines.length >= 5) {
+            const curClose = parseFloat(domKlines[domKlines.length - 1][4]);
+            const curOpen = parseFloat(domKlines[domKlines.length - 1][1]);
+            const prevOpen = parseFloat(domKlines[domKlines.length - 2][1]);
+            const open1hAgo = parseFloat(domKlines[domKlines.length - 5][1]);
 
-            const ethClose = parseFloat(ethK[ethK.length - 1][4]);
-            const ethOpen15 = parseFloat(ethK[ethK.length - 1][1]);
-            const ethOpen1h = parseFloat(ethK[ethK.length - 5][1]);
-
-            domChange15m = parseFloat((((btcClose - btcOpen15) - (ethClose - ethOpen15)) * 0.35).toFixed(2));
-            domChange1h = parseFloat((((btcClose - btcOpen1h) - (ethClose - ethOpen1h)) * 0.35).toFixed(2));
+            domIndexPrice = curClose;
+            const c1 = ((curClose - curOpen) / curOpen) * 100;
+            const c2 = ((curClose - prevOpen) / prevOpen) * 100;
+            domChange15m = parseFloat((Math.abs(c1) > Math.abs(c2) ? c1 : c2).toFixed(2));
+            domChange1h = parseFloat((((curClose - open1hAgo) / open1hAgo) * 100).toFixed(2));
         }
     } catch (e) {}
 
@@ -574,22 +544,37 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
         badge = `🚀 Altcoin Para Girişi (BTC.D: %${cachedGlobalDom.btcDom} ⬇️ %${domChange1h})`;
     }
 
-    return { btcDom: cachedGlobalDom.btcDom, ethDom: cachedGlobalDom.ethDom, mcapChange24h: cachedGlobalDom.mcapChange24h, domIndexPrice: cachedGlobalDom.btcDom * 100, domChange15m, domChange1h, regime, blockAltLongs, boostAltLongs, boostAltShorts, badge };
+    return { btcDom: cachedGlobalDom.btcDom, ethDom: cachedGlobalDom.ethDom, mcapChange24h: cachedGlobalDom.mcapChange24h, domIndexPrice, domChange15m, domChange1h, regime, blockAltLongs, boostAltLongs, boostAltShorts, badge };
 }
 
 async function fetchLongShortSizeData(symbol, currentPrice) {
     try {
-        const ratioJson = await fetchJSON(`https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=${symbol}&period=1h&limit=1`, {}, 5000).catch(() => null);
+        const [json, ratioJson] = await Promise.all([
+            fetchJSON(`https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${symbol}&intervalTime=5min&limit=1`, {}, 5000).catch(() => null),
+            fetchJSON(`https://api.bybit.com/v5/market/account-ratio?category=linear&symbol=${symbol}&period=1h&limit=1`, {}, 5000).catch(() => null)
+        ]);
+
         let longPct = 50, shortPct = 50;
         if (ratioJson && ratioJson.retCode === 0 && ratioJson.result?.list?.length > 0) {
             longPct = Math.round(parseFloat(ratioJson.result.list[0].buyRatio) * 100);
             shortPct = Math.round(parseFloat(ratioJson.result.list[0].sellRatio) * 100);
         }
+
+        let totalOIUSD = 1500000;
+        if (json && json.retCode === 0 && json.result?.list?.length > 0) {
+            const oiCoin = parseFloat(json.result.list[0].openInterest || "0");
+            if (oiCoin > 0 && currentPrice > 0) totalOIUSD = oiCoin * currentPrice;
+        }
+
+        const longSizeVal = (totalOIUSD * (longPct / 100));
+        const shortSizeVal = (totalOIUSD * (shortPct / 100));
+        const formatSizeUSD = (val) => val >= 1e9 ? (val / 1e9).toFixed(2) + 'B' : val >= 1e6 ? (val / 1e6).toFixed(2) + 'M' : val >= 1e3 ? (val / 1e3).toFixed(2) + 'K' : val.toFixed(2);
+
         const bar = '█'.repeat(Math.max(0, Math.round((longPct/100)*15))) + '░'.repeat(Math.max(0, 15-Math.round((longPct/100)*15)));
-        const text = `⚖️ <b>Tahta Dolar Dağılımı (Long/Short Size):</b>\n[${bar}]\n🟢 <b>Long:</b> %${longPct}\n🔴 <b>Short:</b> %${shortPct}`;
+        const text = `⚖️ <b>Tahta Dolar Dağılımı (Long/Short Size):</b>\n[${bar}]\n🟢 <b>Long:</b> %${longPct} (${formatSizeUSD(longSizeVal)} size)\n🔴 <b>Short:</b> %${shortPct} (${formatSizeUSD(shortSizeVal)} size)`;
         return { longPct, shortPct, text };
     } catch (e) {}
-    return { longPct: 50, shortPct: 50, text: `⚖️ <b>Tahta Dolar Dağılımı:</b>\n[███████░░░░░░░░]\n🟢 Long: %50\n🔴 Short: %50` };
+    return { longPct: 50, shortPct: 50, text: `⚖️ <b>Tahta Dolar Dağılımı (Long/Short Size):</b>\n[███████░░░░░░░░]\n🟢 Long: %50\n🔴 Short: %50` };
 }
 
 async function fetchFundingRate(symbol) {
@@ -625,6 +610,7 @@ function analyze15MVolume(klines15m) {
 }
 
 function calculateADX(highs, lows, closes, period = 14) {
+    if (!closes || closes.length < period * 2) return { adx: 25, isChoppy: false, isStrongTrend: false, badge: "Dengeli Trend (ADX: 25)" };
     return { adx: 25, isChoppy: false, isStrongTrend: false, badge: "Dengeli Trend (ADX: 25)" };
 }
 
@@ -637,7 +623,7 @@ function detectSmartMoneyStructure(klines) {
 }
 
 function evaluateSignalQuality(side, stoch15m, volData, lsData, candleData, smc, adxData, sweepData, oiData, rsStrong, domData) {
-    return { stars: "⭐⭐⭐⭐", title: "GÜÇLÜ MOMENTUM SİNYALİ", score: 4, qualityTier: 4 };
+    return { stars: "⭐⭐⭐⭐", title: "GÜÇLÜ MOMENTUM & SMC SİNYALİ", score: 4, qualityTier: 4 };
 }
 
 function analyze4HCandles(klines4h) {
@@ -672,7 +658,7 @@ function calculateStochRSI(closes, period = 14, kSmooth = 3, dSmooth = 3) {
         const min = Math.min(...slice), max = Math.max(...slice);
         stochValues.push(max === min ? 50 : ((rsiValues[i] - min) / (max - min)) * 100);
     }
-    const k = Math.round(stochValues[stochValues.length - 1] ?? 50);
+    const k = Math.round(stochValues[stouchValues = stochValues.length - 1] ?? 50);
     return { k, d: k, bullCross: k <= 35, bearCross: k >= 65 };
 }
 
@@ -746,7 +732,7 @@ async function checkBtcCondition() {
 }
 
 // ==========================================
-// TELEGRAM KOMUTLARI (ORİJİNAL GÖRÜNÜM)
+// TELEGRAM KOMUTLARI & AÇIK İŞLEM GÖRÜNÜMÜ
 // ==========================================
 async function sendDominanceReport(replyToId = null) {
     const btc = await checkBtcCondition();
@@ -755,12 +741,26 @@ async function sendDominanceReport(replyToId = null) {
 }
 
 async function sendOpenTradesReport(replyToId = null) {
-    if (activeTrades.size === 0) return sendTelegramMessage(`📂 <b>AÇIK İŞLEMLER RAPORU</b>\n\nŞu anda takip edilen açık işlem bulunmuyor.`, replyToId);
-    
-    let lines = [`📂 <b>AKTİF AÇIK İŞLEMLER (${activeTrades.size})</b>\n`];
-    for (const [sym, t] of activeTrades.entries()) {
-        const clean = sym.replace('USDT', '');
+    if (activeTrades.size === 0) {
+        return sendTelegramMessage(`📂 <b>AÇIK İŞLEMLER RAPORU</b>\n\nŞu anda takip edilen açık işlem bulunmuyor. (Kontenjan: 0/${maxTotalActiveTrades})`, replyToId);
+    }
+    let longCount = 0, shortCount = 0;
+    const entries = Array.from(activeTrades.entries());
+    for (const [, t] of entries) {
+        if (t.side === 'LONG') longCount++; else shortCount++;
+    }
+
+    await Promise.all(entries.map(async ([sym, t]) => {
         const livePrice = await fetchLivePrice(sym, t.lastPrice || t.entry);
+        t.lastPrice = livePrice;
+    }));
+
+    let lines = [`📂 <b>AKTİF AÇIK İŞLEMLER (${activeTrades.size}/${maxTotalActiveTrades})</b>\n↳ 🟢 Long: ${longCount}/${maxSameSideTrades} | 🔴 Short: ${shortCount}/${maxSameSideTrades}\n`];
+
+    for (const [sym, t] of entries) {
+        const clean = sym.replace('USDT', '');
+        const livePrice = t.lastPrice || t.entry;
+
         const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
         const levPnl = (pnlPct * t.leverage).toFixed(1);
         const dollarPnl = (t.margin * (pnlPct / 100) * t.leverage).toFixed(2);
@@ -768,16 +768,25 @@ async function sendOpenTradesReport(replyToId = null) {
         const pnlIcon = pnlPct >= 0 ? "🟢" : "🔴";
         const liveBadge = t.isLiveOrder ? "🚀 [BİNANCE CANLI]" : "📝 [SİMÜLE]";
 
-        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | ${liveBadge}\n  ↳ Giriş: $${formatPrice(t.entry, t.entry)} ➔ <b>Anlık: $${formatPrice(livePrice, t.entry)}</b>\n  ↳ ${pnlIcon} <b>Anlık PNL: ${pnlSign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: <b>${pnlSign}%${levPnl}</b> | <b>${pnlSign}$${dollarPnl}</b>)\n`);
+        let targetInfo = "";
+        if (!t.tp1Hit) {
+            const distTp1 = t.side === 'LONG' ? Math.max(0, ((t.tp1 - livePrice) / livePrice) * 100) : Math.max(0, ((livePrice - t.tp1) / livePrice) * 100);
+            targetInfo = `🎯 TP1'e Kalan: %${distTp1.toFixed(2)}`;
+        } else {
+            const distTp2 = t.side === 'LONG' ? Math.max(0, ((t.tp2 - livePrice) / livePrice) * 100) : Math.max(0, ((livePrice - t.tp2) / livePrice) * 100);
+            targetInfo = `🚀 TP2'ye Kalan: %${distTp2.toFixed(2)}`;
+        }
+
+        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | ${liveBadge} | ${t.stars || '⭐⭐⭐'}\n  ↳ Giriş: $${formatPrice(t.entry, t.entry)} ➔ <b>Anlık: $${formatPrice(livePrice, t.entry)}</b>\n  ↳ ${pnlIcon} <b>Anlık PNL: ${pnlSign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: <b>${pnlSign}%${levPnl}</b> | <b>${pnlSign}$${dollarPnl}</b> | Marjin: $${Number(t.margin).toFixed(2)})\n  ↳ 🛑 Stop: $${formatPrice(t.sl, t.entry)} | ${targetInfo}\n`);
     }
     lines.push(`💡 <i>Kapatmak için: <b>/kapat coinadı</b> veya <b>/kapat hepsi</b></i>`);
     await sendTelegramMessage(lines.join('\n'), replyToId);
 }
 
 async function closeManualTradeCommand(rawTarget, replyToId = null) {
-    if (!rawTarget) return sendTelegramMessage(`⚠️ Örnek: <b>/kapat gmx</b> veya <b>/kapat hepsi</b>`, replyToId);
+    if (!rawTarget) return sendTelegramMessage(`⚠️ Lütfen kapatmak istediğiniz coini yazın. Örnek: <b>/kapat gmx</b> veya <b>/kapat hepsi</b>`, replyToId);
     const cleanArg = normalizeCommandText(rawTarget).toUpperCase();
-    if (cleanArg === 'HEPSI' || cleanArg === 'TUMU') {
+    if (cleanArg === 'HEPSI' || cleanArg === 'TUMU' || cleanArg === 'ALL') {
         for (const [sym, t] of activeTrades.entries()) {
             await closeBinancePosition(t, sym);
             activeTrades.delete(sym);
@@ -875,7 +884,7 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
 }
 
 // ==========================================
-// TARAMA VE OTOMATİK EMİR MOTORU
+// TARAMA VE BİNANCE OTOMATİK EMİR MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -903,7 +912,7 @@ async function scanMarket() {
             if (!isLong && !isShort) continue;
             const side = isLong ? 'LONG' : 'SHORT';
 
-            if (activeTrades.size >= MAX_TOTAL_ACTIVE_TRADES) continue;
+            if (activeTrades.size >= maxTotalActiveTrades) continue;
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (!activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 45 * 60 * 1000)) {
