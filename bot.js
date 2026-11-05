@@ -43,7 +43,6 @@ function signBinanceQuery(queryString) {
 function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
     return new Promise((resolve) => {
         if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
-            console.log("⚠️ Binance API anahtarları eksik!");
             return resolve({ error: "API_KEYS_MISSING" });
         }
         const timestamp = Date.now();
@@ -72,21 +71,14 @@ function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
             res.on('end', () => {
                 try {
                     const parsed = JSON.parse(data);
-                    if (parsed.code && parsed.code !== 0) {
-                        console.error(`❌ BİNANCE API REDDETTİ (${apiPath}): Kod: ${parsed.code} - Mesaj: ${parsed.msg}`);
-                    }
                     resolve(parsed);
                 } catch (e) {
-                    console.error('❌ Binance Yanıtı JSON Ayrıştırılamadı. Ham Veri:', data);
                     resolve({ error: "JSON_PARSE_ERROR", raw: data });
                 }
             });
         });
         req.on('timeout', () => { req.destroy(); resolve({ error: "TIMEOUT" }); });
-        req.on('error', (err) => {
-            console.error('🚨 BİNANCE BAĞLANTI HATASI:', err.message);
-            resolve({ error: err.message });
-        });
+        req.on('error', (err) => { resolve({ error: err.message }); });
         req.end();
     });
 }
@@ -102,7 +94,6 @@ async function initBinanceExchangeInfo() {
                     stepSize: stepFilter ? parseFloat(stepFilter.stepSize) : 0.001
                 });
             }
-            console.log(`✅ Binance Vadeli İşlemler kuralları yüklendi (${symbolPrecisionMap.size} sembol).`);
         }
     } catch (e) {}
 }
@@ -681,7 +672,7 @@ async function fetchOpenInterestData(symbol) {
     return { changePct: 0, isInflow: false, badge: "Dengeli OI" };
 }
 
-async function analyze15MVolume(klines15m) {
+function analyze15MVolume(klines15m) {
     if (!klines15m || klines15m.length < 22) return { isAlive: true, isSpike: false, ratio: 1.0, badge: "Normal Hacim ✅" };
     const volumes = klines15m.map(k => parseFloat(k[5] || 0));
     const prev20 = volumes.slice(-22, -2);
@@ -1283,7 +1274,7 @@ async function runLoop() {
         await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO GÜNCELLENDİ (BİNANCE CANLI ALIM-SATIM AKTİF)!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} / ${maxTotalActiveTrades}\n💵 <b>Sabit İşlem Marjini:</b> <b>${TRADE_AMOUNT_USDT} USDT (ISOLATED)</b>\n🛡️ <b>Mevcut Pozisyon Koruması:</b> Manuel işlemleriniz tamamen izoledir.\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}`);
     } else {
         await syncStateToTelegramCloud();
-        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: BİNANCE CANLI ALIM-SATIM ENTEGRASYONU TAMAMLANDI!</b>\n\n1️⃣ <b>Otomatik İşlem:</b> Sinyal geldiğinde Binance Vadeli İşlemlerde <b>${TRADE_AMOUNT_USDT} USDT</b> marjin ile anında pozisyon açılır.\n2️⃣ <b>Tam Güvenlik:</b> Pozisyonlar <code>ISOLATED</code> açılır, diğer işlemlerinizi ve bakiyenizi korur.\n3️⃣ <b>Otomatik Kapanış:</b> TP2 veya Stop olduğunda işlem Binance üzerinden piyasa emriyle otomatik kapatılır.`);
+        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: BİNANCE CANLI ALIM-SATIM ENTEGRASYONU TAMAMLANDI!</b>\n1️⃣ <b>Otomatik İşlem:</b> Sinyal geldiğinde Binance Vadeli İşlemlerde <b>${TRADE_AMOUNT_USDT} USDT</b> marjin ile anında pozisyon açılır.`);
     }
 
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1200); } })();
