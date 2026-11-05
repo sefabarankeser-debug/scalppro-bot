@@ -43,6 +43,7 @@ function signBinanceQuery(queryString) {
 function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
     return new Promise((resolve) => {
         if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
+            console.log("⚠️ Binance API anahtarları eksik!");
             return resolve(null);
         }
         const timestamp = Date.now();
@@ -71,14 +72,21 @@ function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
             res.on('end', () => {
                 try {
                     const parsed = JSON.parse(data);
+                    if (parsed.code && parsed.code !== 0) {
+                        console.error(`❌ BİNANCE API REDDETTİ (${apiPath}): Kod: ${parsed.code} - Mesaj: ${parsed.msg}`);
+                    }
                     resolve(parsed);
                 } catch (e) {
+                    console.error('❌ Binance Yanıtı JSON Ayrıştırılamadı. Ham Veri:', data);
                     resolve(null);
                 }
             });
         });
         req.on('timeout', () => { req.destroy(); resolve(null); });
-        req.on('error', () => { resolve(null); });
+        req.on('error', (err) => {
+            console.error('🚨 BİNANCE BAĞLANTI HATASI:', err.message);
+            resolve(null);
+        });
         req.end();
     });
 }
@@ -94,6 +102,7 @@ async function initBinanceExchangeInfo() {
                     stepSize: stepFilter ? parseFloat(stepFilter.stepSize) : 0.001
                 });
             }
+            console.log(`✅ Binance Vadeli İşlemler kuralları yüklendi (${symbolPrecisionMap.size} sembol).`);
         }
     } catch (e) {}
 }
@@ -496,9 +505,8 @@ async function restoreFromTelegramCloudOnStartup() {
     return false;
 }
 
-// DÜZELTİLMİŞ DOĞRU ORANLI CANLI DOMİNANS MOTORU
 async function checkDominanceCondition(btcTrend = "NEUTRAL") {
-    let btcDom = 58.2; 
+    let btcDom = 55.9; 
     let domChange15m = 0;
     let domChange1h = 0;
     let domIndexPrice = 0;
@@ -512,7 +520,7 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
             const open1hAgo = parseFloat(domKlines[domKlines.length - 5][1]);
 
             domIndexPrice = curClose;
-            btcDom = parseFloat((curClose / 100).toFixed(2)); // Doğru yüzdelik oran düzeltmesi
+            btcDom = parseFloat((curClose / 100).toFixed(2));
             
             const c1 = ((curClose - curOpen) / curOpen) * 100;
             const c2 = ((curClose - prevOpen) / prevOpen) * 100;
@@ -1000,584 +1008,6 @@ async function checkBtcCondition() {
     return { safe: Math.abs(worstChange) < 1.8, btcTrend, change15m: worstChange.toFixed(2), change1h: parseFloat(change1h.toFixed(2)), shockDump, shockPump };
 }
 
-async function sendDominanceReport(replyToId = null) {
-    const btc = await checkBtcCondition();
-    const dom = await checkDominanceCondition(btc.btcTrend);
-
-    let strategyAdvice = "⚖️ <b>Strateji:</b> Hem Long hem Short yönlü kurumsal sinyaller dengeli çalışıyor.";
-    if (dom.regime === "ALT_SEASON_FLOW") {
-        strategyAdvice = "🟢 <b>Strateji (Altcoin Ralli Akışı):</b> Sermaye BTC'den altcoinlere akıyor! Altcoin <b>LONG</b> işlemleri ekstra puan alıyor.";
-    } else if (dom.regime === "BTC_SUCKING_LIQUIDITY") {
-        strategyAdvice = "⚠️ <b>Strateji (BTC Likidite Emiyor):</b> Dominans sert yükseliyor. Sıradan altcoin <b>LONG</b>'ları korumaya alındı, sadece A+ Likidite Avı ve <b>SHORT</b> fırsatları açık.";
-    } else if (dom.regime === "ALT_BLEED") {
-        strategyAdvice = "🩸 <b>Strateji (Altcoin Kanama Kalkanı):</b> BTC düşerken Dominans yükseliyor! Altcoin LONG'ları kilitlendi, <b>SHORT</b> yönlü işlemler öncelikli.";
-    }
-
-    const msg = `👑 <b>MAKRO DOMİNANS & PARA AKIŞI RAPORU (CANLI BİNANCE)</b>\n\n• <b>Bitcoin Dominansı (BTC.D):</b> <b>%${dom.btcDom}</b>\n• <b>BTCDOM Vadeli Endeksi:</b> $${dom.domIndexPrice ? dom.domIndexPrice.toFixed(1) : 'N/A'}\n  ↳ 15D Değişim: <b>${dom.domChange15m >= 0 ? '+' : ''}%${dom.domChange15m}</b> | 1S Değişim: <b>${dom.domChange1h >= 0 ? '+' : ''}%${dom.domChange1h}</b>\n• <b>Anlık Rejim:</b> ${dom.badge}\n\n${strategyAdvice}`;
-    await sendTelegramMessage(msg, replyToId);
-}
-
-async function sendOpenTradesReport(replyToId = null) {
-    if (activeTrades.size === 0) {
-        return sendTelegramMessage(`📂 <b>AÇIK İŞLEMLER RAPORU</b>\n\nŞu anda takip edilen açık işlem bulunmuyor. (Kontenjan: 0/${maxTotalActiveTrades} | Tek Yön Sınırı: ${maxSameSideTrades})`, replyToId);
-    }
-    let longCount = 0, shortCount = 0;
-    const entries = Array.from(activeTrades.entries());
-    for (const [, t] of entries) {
-        if (t.side === 'LONG') longCount++; else shortCount++;
-    }
-
-    await Promise.all(entries.map(async ([sym, t]) => {
-        const livePrice = await fetchLivePrice(sym, t.lastPrice || t.entry);
-        t.lastPrice = livePrice;
-    }));
-
-    let lines = [`📂 <b>AKTİF AÇIK İŞLEMLER (${activeTrades.size}/${maxTotalActiveTrades})</b>\n↳ 🟢 Long: ${longCount}/${maxSameSideTrades} | 🔴 Short: ${shortCount}/${maxSameSideTrades}\n`];
-
-    for (const [sym, t] of entries) {
-        const clean = sym.replace('USDT', '');
-        const livePrice = t.lastPrice || t.entry;
-
-        const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
-        const levPnl = (pnlPct * t.leverage).toFixed(1);
-        const dollarPnl = (t.margin * (pnlPct / 100) * t.leverage).toFixed(2);
-        const pnlSign = pnlPct >= 0 ? "+" : "";
-        const pnlIcon = pnlPct >= 0 ? "🟢" : "🔴";
-
-        let targetInfo = "";
-        if (!t.tp1Hit) {
-            const distTp1 = t.side === 'LONG' ? Math.max(0, ((t.tp1 - livePrice) / livePrice) * 100) : Math.max(0, ((livePrice - t.tp1) / livePrice) * 100);
-            targetInfo = `🎯 TP1'e Kalan: %${distTp1.toFixed(2)}`;
-        } else {
-            const distTp2 = t.side === 'LONG' ? Math.max(0, ((t.tp2 - livePrice) / livePrice) * 100) : Math.max(0, ((livePrice - t.tp2) / livePrice) * 100);
-            targetInfo = `🚀 TP2'ye Kalan: %${distTp2.toFixed(2)}`;
-        }
-
-        const liveTag = t.isLiveOrder ? "🚀 [BİNANCE CANLI]" : "📝 [SİMÜLE]";
-        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | ${liveTag} | ${t.stars || '⭐⭐⭐'}\n  ↳ Giriş: $${formatPrice(t.entry, t.entry)} ➔ <b>Anlık: $${formatPrice(livePrice, t.entry)}</b>\n  ↳ ${pnlIcon} <b>Anlık PNL: ${pnlSign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: <b>${pnlSign}%${levPnl}</b> | <b>${pnlSign}$${dollarPnl}</b> | Marjin: $${Number(t.margin).toFixed(2)})\n  ↳ 🛑 Stop: $${formatPrice(t.sl, t.entry)} | ${targetInfo}\n`);
-    }
-    lines.push(`💡 <i>Kapatmak için: <b>/kapat coinadı</b> veya <b>/kapat hepsi</b> | Limit: <b>/kalkan 8 12</b></i>`);
-    await sendTelegramMessage(lines.join('\n'), replyToId);
-}
-
-async function closeManualTradeCommand(rawTarget, replyToId = null) {
-    if (!rawTarget) {
-        return sendTelegramMessage(`⚠️ Lütfen kapatmak istediğiniz coini yazın. Örnek: <b>/kapat gmx</b> veya <b>/kapat hepsi</b>`, replyToId);
-    }
-    const cleanArg = normalizeCommandText(rawTarget).toUpperCase();
-    const oldBalance = calculateCurrentBalance();
-
-    if (cleanArg === 'HEPSI' || cleanArg === 'TUMU' || cleanArg === 'ALL') {
-        if (activeTrades.size === 0) return sendTelegramMessage(`ℹ️ Kapatılacak açık işlem bulunmuyor.`, replyToId);
-        let closedSummary = [];
-        const entries = Array.from(activeTrades.entries());
-        await Promise.all(entries.map(async ([sym, t]) => {
-            t.lastPrice = await fetchLivePrice(sym, t.lastPrice || t.entry);
-        }));
-
-        for (const [sym, t] of entries) {
-            await closeBinancePosition(t, sym);
-            const livePrice = t.lastPrice || t.entry;
-            const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
-            
-            let effectivePnlPct = pnlPct;
-            if (t.tp1Hit) {
-                const tp1Pct = t.side === 'LONG' ? (((t.tp1 - t.entry) / t.entry) * 100) : (((t.entry - t.tp1) / t.entry) * 100);
-                effectivePnlPct = Math.max(0, pnlPct - tp1Pct);
-            }
-            const dollarImpact = t.margin * (effectivePnlPct / 100) * t.leverage;
-            tradeHistory.push({ type: pnlPct >= 0 ? 'MANUAL_WIN' : 'MANUAL_LOSS', symbol: sym, dollarImpact: parseFloat(dollarImpact.toFixed(4)), time: Date.now() });
-            handleTradeResult(sym, pnlPct >= 0 ? 'TP' : 'STOP');
-
-            closedSummary.push(`• <b>#${sym.replace('USDT', '')}</b> (${t.side}): ${pnlPct >= 0 ? '+' : ''}%${pnlPct.toFixed(2)} (${dollarImpact >= 0 ? '+' : ''}$${dollarImpact.toFixed(2)})`);
-            activeTrades.delete(sym);
-        }
-        saveWalletState();
-        const newBalance = calculateCurrentBalance();
-        const diff = newBalance - oldBalance;
-        const diffSign = diff >= 0 ? "+" : "";
-        return sendTelegramMessage(`🖐️ <b>TÜMÜ MANUEL KAPATILDI! (Binance & Sistem)</b>\n\n${closedSummary.join('\n')}\n\n💼 <b>Kasa Hareketi:</b> $${oldBalance.toFixed(2)} ➔ <b>$${newBalance.toFixed(2)}</b> (<b>${diffSign}$${diff.toFixed(2)}</b>)\n\n${getStatsText()}`, replyToId);
-    }
-
-    let sym = cleanArg.replace(/[^A-Z0-9]/g, '');
-    if (FUZZY_MAP[sym]) sym = FUZZY_MAP[sym];
-    if (!sym.endsWith('USDT')) sym += 'USDT';
-
-    if (!activeTrades.has(sym) && activeTrades.has('1000' + sym)) sym = '1000' + sym;
-    if (!activeTrades.has(sym)) {
-        return sendTelegramMessage(`⚠️ <b>#${cleanArg}</b> adında açık işlem bulunamadı.`, replyToId);
-    }
-
-    const t = activeTrades.get(sym);
-    await closeBinancePosition(t, sym);
-
-    const livePrice = await fetchLivePrice(sym, t.lastPrice || t.entry);
-    const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
-
-    let effectivePnlPct = pnlPct;
-    if (t.tp1Hit) {
-        const tp1Pct = t.side === 'LONG' ? (((t.tp1 - t.entry) / t.entry) * 100) : (((t.entry - t.tp1) / t.entry) * 100);
-        effectivePnlPct = Math.max(0, pnlPct - tp1Pct);
-    }
-
-    const dollarImpact = t.margin * (effectivePnlPct / 100) * t.leverage;
-    activeTrades.delete(sym);
-    recordTradeEvent(pnlPct >= 0 ? 'MANUAL_WIN' : 'MANUAL_LOSS', sym, dollarImpact);
-    handleTradeResult(sym, pnlPct >= 0 ? 'TP' : 'STOP');
-
-    const newBalance = calculateCurrentBalance();
-    const diff = newBalance - oldBalance;
-    const diffSign = diff >= 0 ? "+" : "";
-    const sign = pnlPct >= 0 ? "+" : "";
-
-    await sendTelegramMessage(`🖐️ <b>İŞLEM KAPATILDI | #${sym.replace('USDT', '')}</b>\n\n🎯 <b>Yön:</b> ${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}\n💰 <b>PNL:</b> <b>${sign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: ${sign}%${(pnlPct * t.leverage).toFixed(1)})\n💵 <b>Net Dolar Etkisi:</b> <b>${diffSign}$${dollarImpact.toFixed(2)}</b>\n💼 <b>Kasa Hareketi:</b> $${oldBalance.toFixed(2)} ➔ <b>$${newBalance.toFixed(2)}</b>\n\n${getStatsText()}`, replyToId);
-}
-
-async function sendCoinPerformanceReport(replyToId = null) {
-    if (tradeHistory.length === 0) {
-        return sendTelegramMessage(`🏆 <b>COİN PERFORMANS KARNESİ</b>\n\nHenüz sonuçlanmış işlem verisi yok.`, replyToId);
-    }
-    const stats = new Map();
-    for (const item of tradeHistory) {
-        if (!item.symbol) continue;
-        const clean = item.symbol.replace('USDT', '');
-        if (!stats.has(clean)) stats.set(clean, { wins: 0, stops: 0, tp2s: 0 });
-        const st = stats.get(clean);
-        if (item.type === 'TP1' || item.type === 'MANUAL_WIN') st.wins++;
-        else if (item.type === 'TP2') { st.wins++; st.tp2s++; }
-        else if (item.type === 'STOP' || item.type === 'MANUAL_LOSS') st.stops++;
-    }
-
-    const arr = Array.from(stats.entries()).map(([coin, data]) => ({
-        coin, ...data, score: (data.wins * 2) + (data.tp2s * 2) - (data.stops * 3)
-    }));
-
-    const best = [...arr].filter(x => x.wins > 0).sort((a, b) => b.score - a.score).slice(0, 6);
-    const worst = [...arr].filter(x => x.stops > 0).sort((a, b) => b.stops - a.stops).slice(0, 5);
-
-    let msg = `🏆 <b>COİN PERFORMANS LİDERLİK KARNESİ</b>\n\n`;
-    if (best.length > 0) {
-        msg += `🌟 <b>En Çok Kazandıranlar:</b>\n`;
-        for (const b of best) msg += `• <b>#${b.coin}:</b> ${b.wins} Kâr (${b.tp2s} TP2) | ${b.stops} Stop\n`;
-        msg += `\n`;
-    }
-    if (worst.length > 0) {
-        msg += `⚠️ <b>En Çok Stop Edenler:</b>\n`;
-        for (const w of worst) msg += `• <b>#${w.coin}:</b> ${w.stops} Stop | ${w.wins} Kâr\n`;
-    }
-    await sendTelegramMessage(msg, replyToId);
-}
-
-async function sendQuarantineReport(replyToId = null) {
-    const quarantined = [];
-    const risky = [];
-    for (const [sym, prof] of dynamicCoinMemory.entries()) {
-        const clean = sym.replace('USDT', '');
-        if (prof.quarantineUntil > Date.now()) {
-            const remHours = ((prof.quarantineUntil - Date.now()) / (3600 * 1000)).toFixed(1);
-            quarantined.push(`• 🚫 <b>#${clean}:</b> Karantinada (${remHours} saat kaldı)`);
-        } else if (prof.consecutiveStops > 0) {
-            risky.push(`• ⚠️ <b>#${clean}:</b> Peş peşe ${prof.consecutiveStops} Stop`);
-        }
-    }
-    let text = `🛡️ <b>KARANTİNA VE RİSK DURUMU</b>\n\n`;
-    if (quarantined.length === 0 && risky.length === 0) {
-        text += `✅ Karantinada hiçbir parite yok. Tüm 87 parite aktif.`;
-    } else {
-        if (quarantined.length > 0) text += `<b>Karantinadakiler:</b>\n${quarantined.join('\n')}\n\n`;
-        if (risky.length > 0) text += `<b>Sıkılaştırılmışlar:</b>\n${risky.join('\n')}`;
-    }
-    await sendTelegramMessage(text, replyToId);
-}
-
-async function sendWalletReport(replyToId = null) {
-    const startStr = getTurkishDateTimeString(walletStartTime);
-    const currentBal = calculateCurrentBalance();
-    const msg = `💰 <b>BİLEŞİK KASA & BİNANCE RAPORU</b>\n\n🗓️ <b>Başlangıç Tarihi:</b> ${startStr}\n💵 <b>Simüle Kasa Bakiyesi:</b> <b>$${currentBal.toFixed(2)}</b>\n🚀 <b>Binance Gerçek İşlem Marjini:</b> <b>${TRADE_AMOUNT_USDT} USDT (Sabit)</b>\n📂 <b>Açık İşlem:</b> ${activeTrades.size} / ${maxTotalActiveTrades} (Tek Yön Sınırı: ${maxSameSideTrades})\n☁️ <b>Bulut Senkronizasyon:</b> Aktif ✅\n\n${getStatsText()}`;
-    await sendTelegramMessage(msg, replyToId);
-}
-
-async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
-    let clean = normalizeCommandText(rawSymbol).toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (clean.endsWith('USDT')) clean = clean.replace(/USDT$/, '');
-    if (FUZZY_MAP[clean]) clean = FUZZY_MAP[clean];
-    const baseSym = clean + 'USDT';
-
-    let symbol = baseSym;
-    let klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
-    if ((!klines15m || klines15m.length < 25) && !symbol.startsWith('1000')) {
-        symbol = '1000' + baseSym;
-        klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
-    }
-    if (!klines15m || klines15m.length < 25) {
-        return sendTelegramMessage(`⚠️ <b>#${baseSym}</b> için borsalardan şu an yanıt alınamadı, lütfen 5 saniye sonra tekrar deneyin.`, replyToId);
-    }
-    
-    const currentPrice = parseFloat(klines15m[klines15m.length - 1][4]);
-
-    const [klines1h, klines4h, fundingData, lsSizeData, oiData, domData] = await Promise.all([
-        fetchUniversalKlines(symbol, "60", 55, true),
-        fetchUniversalKlines(symbol, "240", 55, true),
-        fetchFundingRate(symbol),
-        fetchLongShortSizeData(symbol, currentPrice),
-        fetchOpenInterestData(symbol),
-        checkDominanceCondition()
-    ]);
-
-    const highs15 = klines15m.map(k => parseFloat(k[2]));
-    const lows15 = klines15m.map(k => parseFloat(k[3]));
-    const closes15 = klines15m.map(k => parseFloat(k[4]));
-    const stoch15m = calculateStochRSI(closes15);
-    const volData = analyze15MVolume(klines15m);
-    const smc = detectSmartMoneyStructure(klines15m);
-    const adxData = calculateADX(highs15, lows15, closes15);
-    const sweepData = detectLiquiditySweep(klines15m);
-    
-    let rsi1h = 50, ema50_1h = currentPrice;
-    if (klines1h && klines1h.length >= 20) {
-        const closes1h = klines1h.map(k => parseFloat(k[4]));
-        rsi1h = Math.round(calculateRSI(closes1h, 14));
-        ema50_1h = calculateEMA(closes1h, 50) || calculateEMA(closes1h, 20) || currentPrice;
-    }
-
-    const isBull1H = (currentPrice >= ema50_1h * 0.990 || rsi1h >= 42);
-    const isBear1H = (currentPrice <= ema50_1h * 1.010 || rsi1h <= 58);
-    let trendText = isBull1H ? "🟢 Yükseliş / V-Dönüş Uygun" : isBear1H ? "🔴 Düşüş Eğilimi (Ayı)" : "⚪ Esnek / Kararsız";
-    
-    const candleData = analyze4HCandles(klines4h);
-    let crossText = stoch15m.bullCross ? "🟢 Yukarı Kesişim" : stoch15m.bearCross ? "🔴 Aşağı Kesişim" : "⏳ Kesişim Bekleniyor";
-
-    let openTradeNote = "";
-    if (activeTrades.has(symbol)) {
-        const t = activeTrades.get(symbol);
-        const pnlPct = t.side === 'LONG' ? (((currentPrice - t.entry) / t.entry) * 100) : (((t.entry - currentPrice) / t.entry) * 100);
-        const sign = pnlPct >= 0 ? "+" : "";
-        openTradeNote = `\n📂 <b>Açık İşlem Durumu:</b> ${t.side} | Giriş: $${formatPrice(t.entry, t.entry)} | PNL: <b>${sign}%${pnlPct.toFixed(2)}</b> (Marjin: $${Number(t.margin).toFixed(2)})\n`;
-    }
-
-    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>${openTradeNote}\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Trend:</b> ${trendText} (RSI: ${rsi1h})\n📐 <b>Trend Gücü (ADX):</b> ${adxData.badge}\n⚡ <b>15M Stoch:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d} (${crossText})\n📊 <b>Hacim:</b> ${volData.badge}\n🐋 <b>Açık Pozisyon (OI):</b> ${oiData.badge}\n🏛️ <b>SMC:</b> ${smc.smcBadge}\n🧲 <b>Likidite:</b> ${sweepData.badge}\n👑 <b>Dominans Akışı:</b> ${domData.badge}\n💸 <b>Funding:</b> ${fundingData.text}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
-    await sendTelegramMessage(reportMsg, replyToId);
-}
-
-async function scanExtremes(type, replyToId = null) {
-    await sendTelegramMessage(`🔍 <b>${type === 'DIP' ? 'Stoch Dip (%K <= 35)' : 'Stoch Tepe (%K >= 65)'} Pariteler Taranıyor...</b>`, replyToId);
-    const valid = [];
-    for (const sym of TARGET_COINS.slice(0, 45)) {
-        try {
-            const k15 = await fetchUniversalKlines(sym, "15", 50, true);
-            await sleep(15);
-            if (!k15 || k15.length < 30) continue;
-            const closes = k15.map(k => parseFloat(k[4]));
-            const stoch = calculateStochRSI(closes);
-            const cur = closes[closes.length - 1];
-            if (type === 'DIP' && stoch.k <= 35) valid.push({ sym: sym.replace('USDT', ''), k: stoch.k, d: stoch.d, price: cur });
-            else if (type === 'TEPE' && stoch.k >= 65) valid.push({ sym: sym.replace('USDT', ''), k: stoch.k, d: stoch.d, price: cur });
-        } catch (e) {}
-    }
-    valid.sort((a, b) => type === 'DIP' ? a.k - b.k : b.k - a.k);
-    if (valid.length === 0) return sendTelegramMessage(`ℹ️ Uygun parite bulunamadı.`, replyToId);
-
-    let text = `🎯 <b>${type === 'DIP' ? '🟢 DİPTEKİ PARİTELER' : '🔴 TEPEDEKİ PARİTELER'}</b>\n\n`;
-    for (const r of valid.slice(0, 8)) {
-        text += `• <b>#${r.sym}:</b> %K:${r.k} / %D:${r.d} | $${formatPrice(r.price, r.price)}\n`;
-    }
-    await sendTelegramMessage(text, replyToId);
-}
-
-async function handleSingleTelegramCommand(message) {
-    const rawTxt = (message.text || "").trim();
-    const normTxt = normalizeCommandText(rawTxt);
-    const msgId = message.message_id;
-
-    if (normTxt === 'acik' || normTxt === '/acik') return sendOpenTradesReport(msgId);
-    if (normTxt === 'kasa' || normTxt === '/kasa') return sendWalletReport(msgId);
-    if (normTxt === 'dominans' || normTxt === '/dominans' || normTxt === 'dom' || normTxt === '/dom') return sendDominanceReport(msgId);
-    if (normTxt === 'karantina' || normTxt === '/karantina') return sendQuarantineReport(msgId);
-    if (normTxt === 'karne' || normTxt === '/karne') return sendCoinPerformanceReport(msgId);
-    if (normTxt === 'dip' || normTxt === '/dip') return scanExtremes('DIP', msgId);
-    if (normTxt === 'tepe' || normTxt === '/tepe') return scanExtremes('TEPE', msgId);
-
-    if (normTxt.startsWith('/kalkan') || normTxt.startsWith('kalkan') || normTxt.startsWith('/limit') || normTxt.startsWith('limit')) {
-        const parts = rawTxt.split(/\s+/);
-        const sideVal = parseInt(parts[1], 10);
-        const totalVal = parseInt(parts[2], 10);
-        if (!isNaN(sideVal) && sideVal >= 1 && sideVal <= 30) {
-            maxSameSideTrades = sideVal;
-            if (!isNaN(totalVal) && totalVal >= sideVal) {
-                maxTotalActiveTrades = totalVal;
-            } else if (maxTotalActiveTrades < sideVal + 2) {
-                maxTotalActiveTrades = sideVal + 4;
-            }
-            saveWalletState();
-            return sendTelegramMessage(`🛡️ <b>RİSK KALKANI LİMİTLERİ GÜNCELLENDİ!</b>\n\n• <b>Tek Yön Sınırı:</b> <b>${maxSameSideTrades}</b> işlem\n• <b>Toplam Kapasite:</b> <b>${maxTotalActiveTrades}</b> işlem\n☁️ <i>Yeni limitler buluta kaydedildi.</i>`, msgId);
-        } else {
-            return sendTelegramMessage(`🛡️ <b>MEVCUT RİSK KALKANI LİMİTLERİ</b>\n\n• <b>Tek Yön Sınırı:</b> ${maxSameSideTrades} işlem\n• <b>Toplam Kapasite:</b> ${maxTotalActiveTrades} işlem\n\n💡 <i>Değiştirmek için:</i> <code>/kalkan 8 12</code>`, msgId);
-        }
-    }
-
-    if (normTxt === 'yedek' || normTxt === '/yedek') {
-        await syncStateToTelegramCloud();
-        const code = encodeCloudState();
-        return sendTelegramMessage(`☁️ <b>BULUT YEDEK GÜNCELLENDİ!</b>\nSabitlenmiş mesaja kaydedildi.\n\n<code>/yukle ${code}</code>`, msgId);
-    }
-
-    if (normTxt.startsWith('/yukle ') || normTxt.startsWith('yukle ')) {
-        const base64Part = rawTxt.split(/\s+/)[1];
-        if (base64Part && decodeAndApplyCloudState(base64Part)) {
-            return sendTelegramMessage(`✅ <b>YEDEK BAŞARIYLA GERİ YÜKLENDİ!</b>\nAçık İşlem: ${activeTrades.size} | Güncel Kasa: $${calculateCurrentBalance().toFixed(2)}`, msgId);
-        } else {
-            return sendTelegramMessage(`⚠️ Geçersiz yedek kodu.`, msgId);
-        }
-    }
-
-    if (normTxt.startsWith('/bakiye') || normTxt.startsWith('bakiye') || normTxt.startsWith('/kasaguncelle')) {
-        const parts = rawTxt.split(/\s+/);
-        const val = parseFloat(parts[1]);
-        if (!isNaN(val) && val > 0) {
-            resetPermanentWallet(val);
-            return sendTelegramMessage(`💰 <b>KASA BAKİYESİ GÜNCELLENDİ!</b>\nSimüle kasa <b>$${val.toFixed(2)}</b> olarak ayarlandı.\n⏱ <b>${getTurkishTimeString()}</b>`, msgId);
-        } else {
-            return sendTelegramMessage(`⚠️ Lütfen geçerli bir tutar yazın. Örnek: <b>/bakiye 1000</b>`, msgId);
-        }
-    }
-
-    if (normTxt.startsWith('/kapat') || normTxt.startsWith('kapat ')) {
-        const arg = rawTxt.split(/\s+/)[1];
-        return closeManualTradeCommand(arg, msgId);
-    }
-
-    if (normTxt === 'sifirla' || normTxt === '/sifirla') {
-        resetPermanentWallet(1000);
-        return sendTelegramMessage(`🔄 <b>SİMÜLE KASA $1000 OLARAK SIFIRLANDI!</b>\n⏱ <b>${getTurkishTimeString()}</b>`, msgId);
-    }
-
-    if (normTxt === 'yardim' || normTxt === '/yardim' || normTxt === 'komutlar' || normTxt === '/komutlar') {
-        return sendTelegramMessage(`🤖 <b>KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri canlı gösterir.\n• <b>/kalkan 8 12</b> : Sınırları değiştirir.\n• <b>/kapat coin</b> : İşlemi kapatır (Binance & Sistem).\n• <b>/dominans</b> : Para akışı raporu.\n• <b>/kasa</b> : Kasa durumu ve marjin bilgisi.`, msgId);
-    }
-
-    let targetCoin = null;
-    if (normTxt.startsWith('/analiz')) targetCoin = rawTxt.split(/\s+/)[1];
-    else if (rawTxt.length >= 2 && rawTxt.length <= 12 && !rawTxt.includes(' ') && !rawTxt.startsWith('/')) targetCoin = rawTxt;
-    
-    if (targetCoin) {
-        return analyzeSpecificCoin(targetCoin, msgId);
-    }
-}
-
-async function initTelegramOffset() {
-    try {
-        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=-1&timeout=1`;
-        const res = await fetchJSON(url, {}, 5000);
-        if (res && res.ok && Array.isArray(res.result) && res.result.length > 0) {
-            lastUpdateId = res.result[res.result.length - 1].update_id;
-        }
-    } catch (e) {}
-}
-
-async function pollTelegramUpdates() {
-    try {
-        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=4`;
-        const res = await fetchJSON(url, {}, 7000);
-        
-        if (res && res.ok && Array.isArray(res.result)) {
-            for (const upd of res.result) {
-                lastUpdateId = upd.update_id;
-                const message = upd.message || upd.channel_post;
-                if (!message || !message.text) continue;
-                handleSingleTelegramCommand(message).catch(() => {});
-            }
-        }
-    } catch (e) {}
-}
-
-async function checkActiveTrades(symbol, currentPrice, btc) {
-    const trade = activeTrades.get(symbol);
-    if (!trade) return;
-
-    trade.lastPrice = currentPrice;
-    if (!trade.highestSeen || currentPrice > trade.highestSeen) trade.highestSeen = currentPrice;
-    if (!trade.lowestSeen || currentPrice < trade.lowestSeen) trade.lowestSeen = currentPrice;
-
-    if (Date.now() - trade.time < 15000) return;
-
-    const cleanSymbol = symbol.replace('USDT', '');
-    const nowTime = getTurkishTimeString();
-
-    if (trade.side === 'LONG') {
-        const curProfitPct = ((currentPrice - trade.entry) / trade.entry) * 100;
-        if (!trade.tp1Hit && !trade.shockProtected && curProfitPct >= 0.55 && (btc.btcTrend === 'DUMP' || btc.shockDump)) {
-            trade.shockProtected = true;
-            trade.sl = trade.entry;
-            saveWalletState();
-            await sendTelegramMessage(`⚡🛡️ <b>ACİL BTC ŞOK KORUMASI | #${cleanSymbol}/USDT</b>\nStop giriş seviyesine çekildi!`);
-            return;
-        }
-
-        if (currentPrice >= trade.tp2) {
-            await closeBinancePosition(trade, symbol);
-            const prevBal = calculateCurrentBalance();
-            const tp2GainPct = ((trade.tp2 - trade.entry) / trade.entry) * 100;
-            const prevTp1Pct = trade.tp1Hit ? (((trade.tp1 - trade.entry) / trade.entry) * 100) : 0;
-            const remainingPct = Math.max(0, tp2GainPct - prevTp1Pct);
-            const dollarImpact = trade.margin * (remainingPct / 100) * trade.leverage;
-
-            activeTrades.delete(symbol);
-            recordTradeEvent('TP2', symbol, dollarImpact);
-            handleTradeResult(symbol, 'TP2');
-            const newBal = calculateCurrentBalance();
-
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅✅ <b>TP2 TAMAMLANDI! | #${cleanSymbol}/USDT</b>\n🚀 <b>Binance Emri Otomatik Kapatıldı!</b>\nNet Ek Kazanım: +$${dollarImpact.toFixed(2)}\n💼 Kasa Hareketi: $${prevBal.toFixed(2)} ➔ <b>$${newBal.toFixed(2)}</b>\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            return;
-        }
-
-        if (!trade.tp1Hit && currentPrice >= trade.tp1) {
-            trade.tp1Hit = true;
-            trade.tp1HitTime = Date.now();
-            trade.sl = trade.entry;
-            const prevBal = calculateCurrentBalance();
-            const tp1GainPct = ((trade.tp1 - trade.entry) / trade.entry) * 100;
-            const dollarImpact = trade.margin * (tp1GainPct / 100) * trade.leverage;
-            recordTradeEvent('TP1', symbol, dollarImpact);
-            handleTradeResult(symbol, 'TP');
-            const newBal = calculateCurrentBalance();
-
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>TP1 ALINDI! | #${cleanSymbol}/USDT</b>\n💰 <b>Kazanılan:</b> +%${tp1GainPct.toFixed(2)} (<b>+$${dollarImpact.toFixed(2)}</b>)\n🛡️ Stop girişe çekildi (Risk-Free). TP2 bekleniyor!\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            return;
-        }
-
-        const midTargetLong = trade.tp1 + ((trade.tp2 - trade.tp1) * 0.5);
-        if (trade.tp1Hit && !trade.trailingHit && currentPrice >= midTargetLong) {
-            trade.trailingHit = true;
-            trade.sl = trade.tp1;
-            saveWalletState();
-            await sendTelegramMessage(`🔒 <b>KÂR KİLİTLENDİ (İZ SÜREN) | #${cleanSymbol}/USDT</b>\nStop TP1 seviyesine çekildi.`);
-            return;
-        }
-
-        if (currentPrice <= trade.sl) {
-            if (trade.tp1Hit && trade.tp1HitTime && (Date.now() - trade.tp1HitTime < 20000)) return;
-            await closeBinancePosition(trade, symbol);
-            let dollarImpact = 0;
-            const prevBal = calculateCurrentBalance();
-            activeTrades.delete(symbol);
-            if (trade.trailingHit) {
-                saveWalletState();
-                await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOPTA KAPANDI | #${cleanSymbol}/USDT</b>\nBinance işlemi kapatıldı. TP1 kârı korundu.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            } else if (trade.tp1Hit || trade.shockProtected) {
-                saveWalletState();
-                await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b>\nBinance işlemi başa baş kapatıldı.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            } else {
-                const slLossPct = ((trade.sl - trade.entry) / trade.entry) * 100;
-                dollarImpact = trade.margin * (slLossPct / 100) * trade.leverage;
-                recordTradeEvent('STOP', symbol, dollarImpact);
-                handleTradeResult(symbol, 'STOP');
-                const newBal = calculateCurrentBalance();
-                await sendTelegramMessage(`❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\nBinance işlemi kapatıldı. Zarar: %${slLossPct.toFixed(2)} (-$${Math.abs(dollarImpact).toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            }
-            return;
-        }
-    }
-
-    if (trade.side === 'SHORT') {
-        const curProfitPct = ((trade.entry - currentPrice) / trade.entry) * 100;
-        if (!trade.tp1Hit && !trade.shockProtected && curProfitPct >= 0.55 && (btc.btcTrend === 'PUMP' || btc.shockPump)) {
-            trade.shockProtected = true;
-            trade.sl = trade.entry;
-            saveWalletState();
-            await sendTelegramMessage(`⚡🛡️ <b>ACİL BTC ŞOK KORUMASI | #${cleanSymbol}/USDT</b>\nStop giriş seviyesine çekildi.`);
-            return;
-        }
-
-        if (currentPrice <= trade.tp2) {
-            await closeBinancePosition(trade, symbol);
-            const prevBal = calculateCurrentBalance();
-            const tp2GainPct = ((trade.entry - trade.tp2) / trade.entry) * 100;
-            const prevTp1Pct = trade.tp1Hit ? (((trade.entry - trade.tp1) / trade.entry) * 100) : 0;
-            const remainingPct = Math.max(0, tp2GainPct - prevTp1Pct);
-            const dollarImpact = trade.margin * (remainingPct / 100) * trade.leverage;
-
-            activeTrades.delete(symbol);
-            recordTradeEvent('TP2', symbol, dollarImpact);
-            handleTradeResult(symbol, 'TP2');
-            const newBal = calculateCurrentBalance();
-
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅✅ <b>TP2 TAMAMLANDI! | #${cleanSymbol}/USDT</b>\n🚀 <b>Binance Emri Kapatıldı!</b> Net Ek Kazanım: +$${dollarImpact.toFixed(2)}\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            return;
-        }
-
-        if (!trade.tp1Hit && currentPrice <= trade.tp1) {
-            trade.tp1Hit = true;
-            trade.tp1HitTime = Date.now();
-            trade.sl = trade.entry;
-            const prevBal = calculateCurrentBalance();
-            const tp1GainPct = ((trade.entry - trade.tp1) / trade.entry) * 100;
-            const dollarImpact = trade.margin * (tp1GainPct / 100) * trade.leverage;
-            recordTradeEvent('TP1', symbol, dollarImpact);
-            handleTradeResult(symbol, 'TP');
-            const newBal = calculateCurrentBalance();
-
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n✅ <b>TP1 ALINDI! | #${cleanSymbol}/USDT</b>\n💰 <b>Kazanılan:</b> +%${tp1GainPct.toFixed(2)} (<b>+$${dollarImpact.toFixed(2)}</b>)\n🛡️ Stop girişe çekildi (Risk-Free). TP2 bekleniyor!\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            return;
-        }
-
-        const midTargetShort = trade.tp1 - ((trade.tp1 - trade.tp2) * 0.5);
-        if (trade.tp1Hit && !trade.trailingHit && currentPrice <= midTargetShort) {
-            trade.trailingHit = true;
-            trade.sl = trade.tp1;
-            saveWalletState();
-            await sendTelegramMessage(`🔒 <b>KÂR KİLİTLENDİ (İZ SÜREN) | #${cleanSymbol}/USDT</b>\nStop TP1 seviyesine çekildi.`);
-            return;
-        }
-
-        if (currentPrice >= trade.sl) {
-            if (trade.tp1Hit && trade.tp1HitTime && (Date.now() - trade.tp1HitTime < 20000)) return;
-            await closeBinancePosition(trade, symbol);
-            let dollarImpact = 0;
-            const prevBal = calculateCurrentBalance();
-            activeTrades.delete(symbol);
-            if (trade.trailingHit) {
-                saveWalletState();
-                await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOPTA KAPANDI | #${cleanSymbol}/USDT</b>\nBinance işlemi kapatıldı. TP1 kârı korundu.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            } else if (trade.tp1Hit || trade.shockProtected) {
-                saveWalletState();
-                await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b>\nBinance işlemi başa baş kapatıldı.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            } else {
-                const slLossPct = ((trade.entry - trade.sl) / trade.entry) * 100;
-                dollarImpact = trade.margin * (slLossPct / 100) * trade.leverage;
-                recordTradeEvent('STOP', symbol, dollarImpact);
-                handleTradeResult(symbol, 'STOP');
-                const newBal = calculateCurrentBalance();
-                await sendTelegramMessage(`❌ <b>STOP TETİKLENDİ | #${cleanSymbol}/USDT</b>\nBinance işlemi kapatıldı. Zarar: %${slLossPct.toFixed(2)} (-$${Math.abs(dollarImpact).toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-            }
-            return;
-        }
-    }
-
-    if (Date.now() - trade.time > 6 * 60 * 60 * 1000) {
-        await closeBinancePosition(trade, symbol);
-        const prevBal = calculateCurrentBalance();
-        const pnlPct = trade.side === 'LONG' ? (((currentPrice - trade.entry) / trade.entry) * 100) : (((trade.entry - currentPrice) / trade.entry) * 100);
-        activeTrades.delete(symbol);
-        if (!trade.tp1Hit) {
-            const dollarImpact = trade.margin * (pnlPct / 100) * trade.leverage;
-            recordTradeEvent(pnlPct >= 0 ? 'MANUAL_WIN' : 'MANUAL_LOSS', symbol, dollarImpact);
-        } else {
-            saveWalletState();
-        }
-        const newBal = calculateCurrentBalance();
-        await sendTelegramMessage(`⌛ <b>ZAMAN AŞIMI (6 SAAT) | #${cleanSymbol}/USDT</b> Binance işlemi kapatıldı.\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
-    }
-}
-
-function canOpenNewTrade(side) {
-    if (activeTrades.size >= maxTotalActiveTrades) return false;
-    let sameSideCount = 0;
-    for (const t of activeTrades.values()) {
-        if (t.side === side) sameSideCount++;
-    }
-    return sameSideCount < maxSameSideTrades;
-}
-
 async function scanMarket() {
     try {
         const session = getActiveSessionName();
@@ -1729,13 +1159,15 @@ async function scanMarket() {
                 else if (quality.qualityTier === 4) leverage = 12;
                 else leverage = 9;
 
+                // === BİNANCE CANLI İŞLEM MOTORU & DETAYLI LOG GÜVENCESİ ===
                 let binanceSuccess = false;
                 let actualExecutedQty = 0;
 
                 if (BINANCE_API_KEY && BINANCE_API_SECRET) {
                     try {
-                        await binanceSignedRequest('/fapi/v1/marginType', 'POST', { symbol, marginType: 'ISOLATED' });
-                        await binanceSignedRequest('/fapi/v1/leverage', 'POST', { symbol, leverage });
+                        console.log(`🔌 Binance Bağlantısı Kuruluyor (${symbol})...`);
+                        const marginRes = await binanceSignedRequest('/fapi/v1/marginType', 'POST', { symbol, marginType: 'ISOLATED' });
+                        const levRes = await binanceSignedRequest('/fapi/v1/leverage', 'POST', { symbol, leverage });
 
                         const positionSizeUsd = TRADE_AMOUNT_USDT * leverage;
                         const calculatedQty = positionSizeUsd / currentPrice;
@@ -1743,6 +1175,8 @@ async function scanMarket() {
 
                         if (finalQty > 0) {
                             const orderSide = signal.side === 'LONG' ? 'BUY' : 'SELL';
+                            console.log(`🚀 Binance Piyasaya Emir İletiliyor: ${symbol} ${orderSide} | Adet: ${finalQty}`);
+                            
                             const orderRes = await binanceSignedRequest('/fapi/v1/order', 'POST', {
                                 symbol,
                                 side: orderSide,
@@ -1753,9 +1187,16 @@ async function scanMarket() {
                             if (orderRes && orderRes.orderId) {
                                 binanceSuccess = true;
                                 actualExecutedQty = parseFloat(orderRes.executedQty || finalQty);
+                                console.log(`✅ BİNANCE CANLI EMİR BAŞARIYLA GERÇEKLEŞTİ: ${symbol} (${orderId})`);
+                            } else {
+                                console.error(`❌ BİNANCE EMİR REDDİ (${symbol}):`, JSON.stringify(orderRes));
                             }
                         }
-                    } catch (bErr) {}
+                    } catch (bErr) {
+                        console.error(`🚨 BİNANCE KRİTİK İŞLEM HATASI (${symbol}):`, bErr.message);
+                    }
+                } else {
+                    console.log("⚠️ Binance API Key veya Secret Key boş! Simülasyon modunda çalışıyor.");
                 }
 
                 activeTrades.set(symbol, { 
@@ -1782,9 +1223,11 @@ async function scanMarket() {
 
                 const modeBadge = isFastRiskFreeMode ? `⚡ Hızlı Risk-Free (${tp1Mult}R)` : `🚀 Trend Takip (${tp1Mult}R)`;
                 const expectedTp1Dollar = (TRADE_AMOUNT_USDT * (parseFloat(signal.tp1Pct) / 100) * leverage).toFixed(2);
-                const liveOrderBadge = binanceSuccess ? `🚀 <b>BİNANCE GERÇEK EMİR AÇILDI (5 USDT İZOLE)</b>` : `⚠️ <i>Simülasyon / Manuel Takip Modu</i>`;
+                
+                // Simülasyon yazısı yerine Binance canlı durumunu net olarak bildirecek rozet
+                const liveOrderBadge = binanceSuccess ? `🚀 <b>BİNANCE GERÇEK EMİR AÇILDI (5 USDT İZOLE)</b>` : `⚠️ <i>Simülasyon / API Yanıt Bekleniyor</i>`;
 
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n${quality.stars} <b>${quality.title}</b>\n${liveOrderBadge}\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Doğal ATR Stop (-%${signal.slPct}):</b> $${signal.sl}\n\n💵 <b>Binance Marjin:</b> <b>$${TRADE_AMOUNT_USDT} USDT</b>\n⚖️ <b>Kaldıraç:</b> <b>${leverage}x</b> (Pozisyon Hacmi: $${(TRADE_AMOUNT_USDT * leverage).toFixed(1)})\n\n🎯 <b>Kademeli Kâr Hedefleri (${modeBadge}):</b>\n• <b>TP1 (+%${signal.tp1Pct} | +$${expectedTp1Dollar}):</b> $${signal.tp1}\n• <b>TP2:</b> $${signal.tp2}\n\n⚙️ <b>Kurumsal Onaylar (8 Filtre):</b>\n• Profil: ${prof.category}\n• Dominans Akışı: ${domData.badge}\n• Trend Gücü: ${adxData.badge}\n• Likidite: ${sweepData.badge}\n• Açık Pozisyon (OI): ${oiData.badge}\n• Rölatif Güç: ${rsBadge}\n• 15M Hacim: ${volData.badge}\n• Smart Money (SMC): ${smc.smcBadge}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Gör</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n${quality.stars} <b>${quality.title}</b>\n${liveOrderBadge}\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Doğal ATR Stop (-%${signal.slPct}):</b> $${signal.sl}\n\n💵 <b>Binance Marjin:</b> <b>$${TRADE_AMOUNT_USDT} USDT</b>\n⚖️ <b>Kaldıraç:</b> <b>${leverage}x</b> (Pozisyon Hacmi: $${(TRADE_AMOUNT_USDT * leverage).toFixed(1)})\n\n🎯 <b>Kademeli Kâr Hedefleri (${modeBadge}):</b>\n• <b>TP1 (+%${signal.tp1Pct} | +$${expectedTp1Dollar}):</b> $${signal.tp1}\n• <b>TP2:</b> $${signal.tp2}\n\n⚙️ <b>Kurumsal Onaylar (8 Filtre):</b>\n• Profil: ${prof.category}\n• Dominans Akışı: ${domData.badge}\n• Trend Gücü: ${adxData.badge}\n• Likidite: ${sweepData.badge}\n• Açık Pozisyon (OI): ${oiData.badge}\n• Rölatif Güç: ${rsBadge}\n• 15M Hacim: ${volData.badge}\n• Smart Money (SMC): ${smc.smcBadge}\n\n${lsSizeData.text}\n\n${candleData.reportTest}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Gör</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(msg);
                 signalSentInThisCycle = true;
             }
@@ -1792,7 +1235,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda" : "⚪ Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${maxTotalActiveTrades} (Tek Yön: ${maxSameSideTrades})\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n🚀 Binance Otomatik Emir: Aktif (5 USDT İzole)\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /kalkan 8 12 | /dominans | /kapat | /kasa</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans:ရှင် | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${maxTotalActiveTrades} (Tek Yön: ${maxSameSideTrades})\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n🚀 Binance Otomatik Emir: Aktif (5 USDT İzole)\n\n${getStatsTest()}\n\n⌨️ <i>Komutlar: /acik | /kalkan 8 12 | /dominans | /kapat | /kasa</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
