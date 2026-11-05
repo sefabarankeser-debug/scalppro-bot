@@ -505,6 +505,32 @@ async function restoreFromTelegramCloudOnStartup() {
     return false;
 }
 
+async function initTelegramOffset() {
+    try {
+        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=-1&timeout=1`;
+        const res = await fetchJSON(url, {}, 5000);
+        if (res && res.ok && Array.isArray(res.result) && res.result.length > 0) {
+            lastUpdateId = res.result[res.result.length - 1].update_id;
+        }
+    } catch (e) {}
+}
+
+async function pollTelegramUpdates() {
+    try {
+        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=4`;
+        const res = await fetchJSON(url, {}, 7000);
+        
+        if (res && res.ok && Array.isArray(res.result)) {
+            for (const upd of res.result) {
+                lastUpdateId = upd.update_id;
+                const message = upd.message || upd.channel_post;
+                if (!message || !message.text) continue;
+                handleSingleTelegramCommand(message).catch(() => {});
+            }
+        }
+    } catch (e) {}
+}
+
 async function checkDominanceCondition(btcTrend = "NEUTRAL") {
     let btcDom = 55.9; 
     let domChange15m = 0;
@@ -655,7 +681,7 @@ async function fetchOpenInterestData(symbol) {
     return { changePct: 0, isInflow: false, badge: "Dengeli OI" };
 }
 
-function analyze15MVolume(klines15m) {
+async function analyze15MVolume(klines15m) {
     if (!klines15m || klines15m.length < 22) return { isAlive: true, isSpike: false, ratio: 1.0, badge: "Normal Hacim ✅" };
     const volumes = klines15m.map(k => parseFloat(k[5] || 0));
     const prev20 = volumes.slice(-22, -2);
@@ -1159,7 +1185,6 @@ async function scanMarket() {
                 else if (quality.qualityTier === 4) leverage = 12;
                 else leverage = 9;
 
-                // === BİNANCE CANLI İŞLEM MOTORU & TELEGRAM HATA BİLDİRİMİ ===
                 let binanceSuccess = false;
                 let actualExecutedQty = 0;
                 let errorReason = "";
@@ -1228,7 +1253,6 @@ async function scanMarket() {
                 const modeBadge = isFastRiskFreeMode ? `⚡ Hızlı Risk-Free (${tp1Mult}R)` : `🚀 Trend Takip (${tp1Mult}R)`;
                 const expectedTp1Dollar = (TRADE_AMOUNT_USDT * (parseFloat(signal.tp1Pct) / 100) * leverage).toFixed(2);
                 
-                // Eğer Binance hata verdiyse hatayı sinyal kartına basacağız ki hemen görebilelim
                 const liveOrderBadge = binanceSuccess 
                     ? `🚀 <b>BİNANCE GERÇEK EMİR AÇILDI (5 USDT İZOLE)</b>` 
                     : `⚠️ <b>BİNANCE REDDİ:</b> <code>${errorReason || 'Bilinmeyen Hata'}</code>`;
