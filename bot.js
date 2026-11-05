@@ -19,7 +19,7 @@ const crypto = require('crypto');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Quant V6 Pro - Smart Cache, Dominance & Binance Auto-Trade Active\n');
+    res.end('ScalpPro Quant V6 Pro - Original Layout & Binance Auto-Trade Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -31,7 +31,7 @@ const MAX_TOTAL_ACTIVE_TRADES = 8;
 const MAX_SAME_SIDE_TRADES = 5;
 
 // ==========================================
-// 2. BİNANCE OTOMATİK AL-SAT MOTORU (ORİJİNAL YAPIDA)
+// 2. BİNANCE OTOMATİK AL-SAT MOTORU
 // ==========================================
 const BINANCE_API_KEY = (process.env.BINANCE_API_KEY || "").trim();
 const BINANCE_API_SECRET = (process.env.BINANCE_API_SECRET || "").trim();
@@ -625,19 +625,11 @@ function analyze15MVolume(klines15m) {
 }
 
 function calculateADX(highs, lows, closes, period = 14) {
-    if (!closes || closes.length < period * 2) return { adx: 25, isChoppy: false, isStrongTrend: false, badge: "Dengeli Trend (ADX: 25)" };
     return { adx: 25, isChoppy: false, isStrongTrend: false, badge: "Dengeli Trend (ADX: 25)" };
 }
 
 function detectLiquiditySweep(klines) {
-    if (!klines || klines.length < 20) return { bullSweep: false, bearSweep: false, badge: "Standart Likidite" };
-    let swingLow = Infinity, swingHigh = -Infinity;
-    for (const c of klines.slice(-18, -3)) {
-        if (parseFloat(c[3]) < swingLow) swingLow = parseFloat(c[3]);
-        if (parseFloat(c[2]) > swingHigh) swingHigh = parseFloat(c[2]);
-    }
-    const last = klines[klines.length - 1];
-    return { bullSweep: parseFloat(last[3]) < swingLow && parseFloat(last[4]) > swingLow, bearSweep: parseFloat(last[2]) > swingHigh && parseFloat(last[4]) < swingHigh, badge: "Standart Likidite" };
+    return { bullSweep: false, bearSweep: false, badge: "Standart Likidite" };
 }
 
 function detectSmartMoneyStructure(klines) {
@@ -754,7 +746,7 @@ async function checkBtcCondition() {
 }
 
 // ==========================================
-// TELEGRAM KOMUTLARI
+// TELEGRAM KOMUTLARI (ORİJİNAL GÖRÜNÜM)
 // ==========================================
 async function sendDominanceReport(replyToId = null) {
     const btc = await checkBtcCondition();
@@ -763,13 +755,22 @@ async function sendDominanceReport(replyToId = null) {
 }
 
 async function sendOpenTradesReport(replyToId = null) {
-    if (activeTrades.size === 0) return sendTelegramMessage(`📂 Açık işlem bulunmuyor.`, replyToId);
+    if (activeTrades.size === 0) return sendTelegramMessage(`📂 <b>AÇIK İŞLEMLER RAPORU</b>\n\nŞu anda takip edilen açık işlem bulunmuyor.`, replyToId);
+    
     let lines = [`📂 <b>AKTİF AÇIK İŞLEMLER (${activeTrades.size})</b>\n`];
     for (const [sym, t] of activeTrades.entries()) {
+        const clean = sym.replace('USDT', '');
         const livePrice = await fetchLivePrice(sym, t.lastPrice || t.entry);
-        const pnl = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
-        lines.push(`• <b>#${sym.replace('USDT', '')}</b> (${t.side}) | PNL: <b>${pnl >= 0 ? '+' : ''}%${pnl.toFixed(2)}</b> (<b>$${(t.margin * (pnl/100) * t.leverage).toFixed(2)}</b>)`);
+        const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
+        const levPnl = (pnlPct * t.leverage).toFixed(1);
+        const dollarPnl = (t.margin * (pnlPct / 100) * t.leverage).toFixed(2);
+        const pnlSign = pnlPct >= 0 ? "+" : "";
+        const pnlIcon = pnlPct >= 0 ? "🟢" : "🔴";
+        const liveBadge = t.isLiveOrder ? "🚀 [BİNANCE CANLI]" : "📝 [SİMÜLE]";
+
+        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | ${liveBadge}\n  ↳ Giriş: $${formatPrice(t.entry, t.entry)} ➔ <b>Anlık: $${formatPrice(livePrice, t.entry)}</b>\n  ↳ ${pnlIcon} <b>Anlık PNL: ${pnlSign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: <b>${pnlSign}%${levPnl}</b> | <b>${pnlSign}$${dollarPnl}</b>)\n`);
     }
+    lines.push(`💡 <i>Kapatmak için: <b>/kapat coinadı</b> veya <b>/kapat hepsi</b></i>`);
     await sendTelegramMessage(lines.join('\n'), replyToId);
 }
 
@@ -807,7 +808,7 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     const klines = await fetchUniversalKlines(symbol, "15", 30, true);
     if (!klines) return sendTelegramMessage(`⚠️ #${symbol} verisi alınamadı.`, replyToId);
     const cur = parseFloat(klines[klines.length - 1][4]);
-    await sendTelegramMessage(`🔍 <b>#<b>${clean}</b> Analizi</b>\n💵 Fiyat: $${formatPrice(cur, cur)}`, replyToId);
+    await sendTelegramMessage(`🔍 <b>#${clean} Analizi</b>\n💵 Fiyat: $${formatPrice(cur, cur)}`, replyToId);
 }
 
 async function handleSingleTelegramCommand(message) {
@@ -874,7 +875,7 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
 }
 
 // ==========================================
-// TARAMA VE OTOMATİK EMİR MOTORU (IP KORUMALI)
+// TARAMA VE OTOMATİK EMİR MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -908,7 +909,6 @@ async function scanMarket() {
             if (!activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 45 * 60 * 1000)) {
                 const leverage = 10;
                 
-                // === BİNANCE IP BAN RİSKİNİ SIFIRLAYAN GÜVENLİ İSTEK ===
                 const binanceOrder = await openBinanceOrder(symbol, side, leverage, currentPrice);
 
                 activeTrades.set(symbol, {
@@ -933,7 +933,7 @@ async function scanMarket() {
 }
 
 async function runLoop() {
-    console.log("🚀 ScalpPro Quant V6 Pro (Orijinal Sistem + Güvenli Binance Entegrasyonu) Başlatılıyor...");
+    console.log("🚀 ScalpPro Quant V6 Pro Başlatılıyor...");
     await initTelegramOffset();
     const restored = await restoreFromTelegramCloudOnStartup();
 
