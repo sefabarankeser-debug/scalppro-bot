@@ -11,6 +11,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
 
 // ==========================================
 // 1. RENDER PORT & SABİT TELEGRAM BİLGİLERİ
@@ -18,7 +19,7 @@ const zlib = require('zlib');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Quant V6 Pro - Smart Cache, Dominance & L/S Size Active\n');
+    res.end('ScalpPro Quant V6 Pro - Smart Cache, Dominance, L/S Size & Binance Auto-Trade Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -28,6 +29,170 @@ const CHAT_ID = "-1004412694884";
 
 const MAX_TOTAL_ACTIVE_TRADES = 8;
 const MAX_SAME_SIDE_TRADES = 5;
+
+// ==========================================
+// 1.5 BINANCE FUTURES OTOMATİK AL-SAT MOTORU
+// ==========================================
+const BINANCE_API_KEY = (process.env.BINANCE_API_KEY || "").trim();
+const BINANCE_API_SECRET = (process.env.BINANCE_API_SECRET || "").trim();
+const TRADE_AMOUNT_USDT = parseFloat(process.env.TRADE_AMOUNT) || 5;
+
+const symbolPrecisionMap = new Map();
+
+function signBinanceQuery(queryString) {
+    return crypto.createHmac('sha256', BINANCE_API_SECRET).update(queryString).digest('hex');
+}
+
+function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
+    return new Promise((resolve) => {
+        if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
+            return resolve({ code: -9999, msg: "Render'da BINANCE_API_KEY veya SECRET tanimli degil!" });
+        }
+        const timestamp = Date.now();
+        const queryObj = { ...params, timestamp, recvWindow: 10000 };
+        const queryString = Object.keys(queryObj)
+            .map(k => `${k}=${encodeURIComponent(queryObj[k])}`)
+            .join('&');
+        const signature = signBinanceQuery(queryString);
+        const fullPath = `${apiPath}?${queryString}&signature=${signature}`;
+
+        const options = {
+            hostname: 'fapi.binance.com',
+            port: 443,
+            path: fullPath,
+            method: method,
+            headers: {
+                'X-MBX-APIKEY': BINANCE_API_KEY,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            timeout: 8000
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    if (parsed.code && parsed.code < 0 && parsed.code !== -4046) {
+                        console.error(`❌ Binance API Hatası (${apiPath}): [${parsed.code}] ${parsed.msg}`);
+                    }
+                    resolve(parsed);
+                } catch (e) {
+                    resolve({ code: -9998, msg: "JSON Yanit Hatasi" });
+                }
+            });
+        });
+        req.on('timeout', () => { req.destroy(); resolve({ code: -9997, msg: "Baglanti Zaman Asimi" }); });
+        req.on('error', (err) => { resolve({ code: -9996, msg: err.message }); });
+        req.end();
+    });
+}
+
+async function initBinanceExchangeInfo() {
+    try {
+        const info = await fetchJSON("https://fapi.binance.com/fapi/v1/exchangeInfo", {}, 8000);
+        if (info && Array.isArray(info.symbols)) {
+            for (const s of info.symbols) {
+                const stepFilter = s.filters?.find(f => f.filterType === 'LOT_SIZE');
+                symbolPrecisionMap.set(s.symbol, {
+                    quantityPrecision: s.quantityPrecision ?? 0,
+                    stepSize: stepFilter ? parseFloat(stepFilter.stepSize) : 0.001
+                });
+            }
+            console.log(`✅ Binance Vadeli İşlemler kuralları yüklendi (${symbolPrecisionMap.size} sembol).`);
+        }
+    } catch (e) {
+        console.error("ExchangeInfo yüklenemedi:", e.message);
+    }
+}
+
+function formatQuantity(symbol, qty) {
+    const meta = symbolPrecisionMap.get(symbol);
+    if (!meta) return Number(qty.toFixed(2));
+    const step = meta.stepSize;
+    const rounded = Math.floor((qty + 1e-9) / step) * step;
+    return Number(rounded.toFixed(meta.quantityPrecision));
+}
+
+async function openBinanceOrder(symbol, side, leverage, currentPrice) {
+    if (!BINANCE_API_KEY || !BINANCE_API_SECRET) {
+        return { ok: false, qty: 0, err: "Render Environment'ta API Key/Secret Eksik" };
+    }
+    try {
+        if (symbolPrecisionMap.size === 0) await initBinanceExchangeInfo();
+
+        // 1. İzole marjin ayarla (-4046 zaten izole demektir, sorun değil)
+        await binanceSignedRequest('/fapi/v1/marginType', 'POST', { symbol, marginType: 'ISOLATED' });
+
+        // 2. Kaldıraç ayarla
+        const levRes = await binanceSignedRequest('/fapi/v1/leverage', 'POST', { symbol, leverage });
+        if (levRes && levRes.code && levRes.code < 0) {
+            return { ok: false, qty: 0, err: `[${levRes.code}] ${levRes.msg}` };
+        }
+
+        // 3. Miktarı hesapla ve emri gönder
+        const positionSizeUsd = TRADE_AMOUNT_USDT * leverage;
+        const rawQty = positionSizeUsd / currentPrice;
+        const finalQty = formatQuantity(symbol, rawQty);
+
+        if (!finalQty || finalQty <= 0) {
+            return { ok: false, qty: 0, err: `Miktar çok küçük (${rawQty.toFixed(6)})` };
+        }
+
+        const orderSide = side === 'LONG' ? 'BUY' : 'SELL';
+        const orderRes = await binanceSignedRequest('/fapi/v1/order', 'POST', {
+            symbol,
+            side: orderSide,
+            type: 'MARKET',
+            quantity: finalQty
+        });
+
+        // Eğer hesapta Hedge Mode (Çift Yönlü Mod) açıksa positionSide ekleyip tekrar dene
+        if (orderRes && orderRes.code === -4061) {
+            const hedgeRes = await binanceSignedRequest('/fapi/v1/order', 'POST', {
+                symbol,
+                side: orderSide,
+                positionSide: side,
+                type: 'MARKET',
+                quantity: finalQty
+            });
+            if (hedgeRes && hedgeRes.orderId) {
+                return { ok: true, qty: parseFloat(hedgeRes.executedQty || finalQty), isHedge: true, err: "" };
+            }
+            return { ok: false, qty: 0, err: `[${hedgeRes?.code}] ${hedgeRes?.msg}` };
+        }
+
+        if (orderRes && orderRes.orderId) {
+            return { ok: true, qty: parseFloat(orderRes.executedQty || finalQty), isHedge: false, err: "" };
+        }
+
+        return { ok: false, qty: 0, err: `[${orderRes?.code || 'HATA'}] ${orderRes?.msg || 'Emir reddedildi'}` };
+    } catch (e) {
+        return { ok: false, qty: 0, err: e.message };
+    }
+}
+
+async function closeBinancePosition(trade, symbol) {
+    if (!trade || !trade.isLiveOrder || !trade.executedQty || trade.executedQty <= 0) return;
+    try {
+        const closeSide = trade.side === 'LONG' ? 'SELL' : 'BUY';
+        const params = {
+            symbol: symbol,
+            side: closeSide,
+            type: 'MARKET',
+            quantity: trade.executedQty
+        };
+        if (trade.isHedge) {
+            params.positionSide = trade.side;
+        } else {
+            params.reduceOnly = 'true';
+        }
+        await binanceSignedRequest('/fapi/v1/order', 'POST', params);
+    } catch (e) {
+        console.error(`Binance Kapatma Hatası (${symbol}):`, e.message);
+    }
+}
 
 // ==========================================
 // 2. ADAPTİF PROFİLLER VE SEÇİCİ SEPET (87 PARİTE)
@@ -434,6 +599,9 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
             const open1hAgo = parseFloat(domKlines[domKlines.length - 5][1]);
 
             domIndexPrice = curClose;
+            if (Date.now() - cachedGlobalDom.updatedAt > 10 * 60 * 1000) {
+                cachedGlobalDom.btcDom = parseFloat((curClose / 100).toFixed(2));
+            }
             const c1 = ((curClose - curOpen) / curOpen) * 100;
             const c2 = ((curClose - prevOpen) / prevOpen) * 100;
             domChange15m = parseFloat((Math.abs(c1) > Math.abs(c2) ? c1 : c2).toFixed(2));
@@ -983,7 +1151,8 @@ async function sendOpenTradesReport(replyToId = null) {
             targetInfo = `🚀 TP2'ye Kalan: %${distTp2.toFixed(2)}`;
         }
 
-        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | ${t.stars || '⭐⭐⭐'}\n  ↳ Giriş: $${formatPrice(t.entry, t.entry)} ➔ <b>Anlık: $${formatPrice(livePrice, t.entry)}</b>\n  ↳ ${pnlIcon} <b>Anlık PNL: ${pnlSign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: <b>${pnlSign}%${levPnl}</b> | <b>${pnlSign}$${dollarPnl}</b> | Marjin: $${Number(t.margin).toFixed(2)})\n  ↳ 🛑 Stop: $${formatPrice(t.sl, t.entry)} | ${targetInfo}\n`);
+        const liveBadge = t.isLiveOrder ? "🚀 [BİNANCE CANLI]" : "📝 [SİMÜLE]";
+        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | ${liveBadge} | ${t.stars || '⭐⭐⭐'}\n  ↳ Giriş: $${formatPrice(t.entry, t.entry)} ➔ <b>Anlık: $${formatPrice(livePrice, t.entry)}</b>\n  ↳ ${pnlIcon} <b>Anlık PNL: ${pnlSign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: <b>${pnlSign}%${levPnl}</b> | <b>${pnlSign}$${dollarPnl}</b> | Marjin: $${Number(t.margin).toFixed(2)})\n  ↳ 🛑 Stop: $${formatPrice(t.sl, t.entry)} | ${targetInfo}\n`);
     }
     lines.push(`💡 <i>Kapatmak için: <b>/kapat coinadı</b> veya <b>/kapat hepsi</b></i>`);
     await sendTelegramMessage(lines.join('\n'), replyToId);
@@ -1005,6 +1174,7 @@ async function closeManualTradeCommand(rawTarget, replyToId = null) {
         }));
 
         for (const [sym, t] of entries) {
+            await closeBinancePosition(t, sym);
             const livePrice = t.lastPrice || t.entry;
             const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
             
@@ -1037,6 +1207,8 @@ async function closeManualTradeCommand(rawTarget, replyToId = null) {
     }
 
     const t = activeTrades.get(sym);
+    await closeBinancePosition(t, sym);
+
     const livePrice = await fetchLivePrice(sym, t.lastPrice || t.entry);
     const pnlPct = t.side === 'LONG' ? (((livePrice - t.entry) / t.entry) * 100) : (((t.entry - livePrice) / t.entry) * 100);
 
@@ -1119,7 +1291,7 @@ async function sendQuarantineReport(replyToId = null) {
 async function sendWalletReport(replyToId = null) {
     const startStr = getTurkishDateTimeString(walletStartTime);
     const currentBal = calculateCurrentBalance();
-    const msg = `💰 <b>KALICI BİLEŞİK KASA RAPORU</b>\n\n🗓️ <b>Başlangıç Tarihi:</b> ${startStr}\n💵 <b>İlk Başlangıç Bakiyesi:</b> $${customStartingBalance}\n💵 <b>Güncel Bileşik Bakiye:</b> <b>$${currentBal.toFixed(2)}</b>\n📈 <b>Yeni İşlem Marjinleri (Bileşik):</b>\n  • 3⭐ Standart (%5): <b>$${(currentBal * 0.05).toFixed(2)}</b>\n  • 4⭐ Güçlü (%7.5): <b>$${(currentBal * 0.075).toFixed(2)}</b>\n  • 5⭐ VIP (%10): <b>$${(currentBal * 0.10).toFixed(2)}</b>\n📂 <b>Açık İşlem:</b> ${activeTrades.size} / ${MAX_TOTAL_ACTIVE_TRADES}\n☁️ <b>Bulut Senkronizasyon:</b> Aktif ✅\n\n${getStatsText()}`;
+    const msg = `💰 <b>KALICI BİLEŞİK KASA RAPORU</b>\n\n🗓️ <b>Başlangıç Tarihi:</b> ${startStr}\n💵 <b>İlk Başlangıç Bakiyesi:</b> $${customStartingBalance}\n💵 <b>Güncel Bileşik Bakiye:</b> <b>$${currentBal.toFixed(2)}</b>\n🚀 <b>Binance Canlı İşlem Marjini:</b> <b>$${TRADE_AMOUNT_USDT} USDT (İzole)</b>\n📈 <b>Yeni İşlem Marjinleri (Bileşik):</b>\n  • 3⭐ Standart (%5): <b>$${(currentBal * 0.05).toFixed(2)}</b>\n  • 4⭐ Güçlü (%7.5): <b>$${(currentBal * 0.075).toFixed(2)}</b>\n  • 5⭐ VIP (%10): <b>$${(currentBal * 0.10).toFixed(2)}</b>\n📂 <b>Açık İşlem:</b> ${activeTrades.size} / ${MAX_TOTAL_ACTIVE_TRADES}\n☁️ <b>Bulut Senkronizasyon:</b> Aktif ✅\n\n${getStatsText()}`;
     await sendTelegramMessage(msg, replyToId);
 }
 
@@ -1325,6 +1497,7 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
         }
 
         if (currentPrice >= trade.tp2) {
+            await closeBinancePosition(trade, symbol);
             const prevBal = calculateCurrentBalance();
             const tp2GainPct = ((trade.tp2 - trade.entry) / trade.entry) * 100;
             const prevTp1Pct = trade.tp1Hit ? (((trade.tp1 - trade.entry) / trade.entry) * 100) : 0;
@@ -1366,6 +1539,7 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
 
         if (currentPrice <= trade.sl) {
             if (trade.tp1Hit && trade.tp1HitTime && (Date.now() - trade.tp1HitTime < 20000)) return;
+            await closeBinancePosition(trade, symbol);
             let dollarImpact = 0;
             const prevBal = calculateCurrentBalance();
             activeTrades.delete(symbol);
@@ -1398,6 +1572,7 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
         }
 
         if (currentPrice <= trade.tp2) {
+            await closeBinancePosition(trade, symbol);
             const prevBal = calculateCurrentBalance();
             const tp2GainPct = ((trade.entry - trade.tp2) / trade.entry) * 100;
             const prevTp1Pct = trade.tp1Hit ? (((trade.entry - trade.tp1) / trade.entry) * 100) : 0;
@@ -1439,6 +1614,7 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
 
         if (currentPrice >= trade.sl) {
             if (trade.tp1Hit && trade.tp1HitTime && (Date.now() - trade.tp1HitTime < 20000)) return;
+            await closeBinancePosition(trade, symbol);
             let dollarImpact = 0;
             const prevBal = calculateCurrentBalance();
             activeTrades.delete(symbol);
@@ -1461,6 +1637,7 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
     }
 
     if (Date.now() - trade.time > 6 * 60 * 60 * 1000) {
+        await closeBinancePosition(trade, symbol);
         const prevBal = calculateCurrentBalance();
         const pnlPct = trade.side === 'LONG' ? (((currentPrice - trade.entry) / trade.entry) * 100) : (((trade.entry - currentPrice) / trade.entry) * 100);
         activeTrades.delete(symbol);
@@ -1648,6 +1825,9 @@ async function scanMarket() {
                     marginPct = 5;
                 }
 
+                // === BİNANCE OTOMATİK EMİR GÖNDERİMİ ===
+                const binanceOrder = await openBinanceOrder(symbol, signal.side, leverage, currentPrice);
+
                 const margin = parseFloat(((liveWalletBalance * marginPct) / 100).toFixed(2));
                 const expectedTp1Dollar = (margin * (parseFloat(signal.tp1Pct) / 100) * leverage).toFixed(2);
 
@@ -1667,14 +1847,20 @@ async function scanMarket() {
                     leverage: leverage,
                     margin: margin,
                     marginPct: marginPct,
+                    isLiveOrder: binanceOrder.ok,
+                    executedQty: binanceOrder.qty,
+                    isHedge: binanceOrder.isHedge || false,
                     time: Date.now() 
                 });
                 alertedCoins.set(symbol, Date.now());
                 saveWalletState();
 
                 const modeBadge = isFastRiskFreeMode ? `⚡ Hızlı Risk-Free (${tp1Mult}R)` : `🚀 Trend Takip (${tp1Mult}R)`;
+                const liveOrderBadge = binanceOrder.ok
+                    ? `🚀 <b>BİNANCE GERÇEK EMİR AÇILDI (${TRADE_AMOUNT_USDT} USDT İZOLE | Adet: ${binanceOrder.qty})</b>`
+                    : `⚠️ <b>BİNANCE EMİR AÇILAMADI:</b> <code>${binanceOrder.err}</code>`;
 
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n${quality.stars} <b>${quality.title}</b>\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Doğal ATR Stop (-%${signal.slPct}):</b> $${signal.sl}\n\n💼 <b>Güncel Kasa:</b> $${liveWalletBalance.toFixed(2)}\n💵 <b>Bileşik Marjin (Kasanın %${marginPct}'i):</b> <b>$${margin.toFixed(2)}</b>\n⚖️ <b>Dinamik Kaldıraç:</b> <b>${leverage}x</b> (Pozisyon: $${(margin * leverage).toFixed(1)})\n\n🎯 <b>Kademeli Kâr Hedefleri (${modeBadge}):</b>\n• <b>TP1 (+%${signal.tp1Pct} | +$${expectedTp1Dollar}):</b> $${signal.tp1}\n• <b>TP2:</b> $${signal.tp2}\n\n⚙️ <b>Kurumsal Onaylar (8 Filtre):</b>\n• Profil: ${prof.category}\n• Dominans Akışı: ${domData.badge}\n• Trend Gücü: ${adxData.badge}\n• Likidite: ${sweepData.badge}\n• Açık Pozisyon (OI): ${oiData.badge}\n• Rölatif Güç: ${rsBadge}\n• 15M Hacim: ${volData.badge}\n• Smart Money (SMC): ${smc.smcBadge}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n${quality.stars} <b>${quality.title}</b>\n${liveOrderBadge}\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Doğal ATR Stop (-%${signal.slPct}):</b> $${signal.sl}\n\n💼 <b>Güncel Kasa:</b> $${liveWalletBalance.toFixed(2)}\n💵 <b>Bileşik Marjin (Kasanın %${marginPct}'i):</b> <b>$${margin.toFixed(2)}</b>\n⚖️ <b>Dinamik Kaldıraç:</b> <b>${leverage}x</b> (Pozisyon: $${(margin * leverage).toFixed(1)})\n\n🎯 <b>Kademeli Kâr Hedefleri (${modeBadge}):</b>\n• <b>TP1 (+%${signal.tp1Pct} | +$${expectedTp1Dollar}):</b> $${signal.tp1}\n• <b>TP2:</b> $${signal.tp2}\n\n⚙️ <b>Kurumsal Onaylar (8 Filtre):</b>\n• Profil: ${prof.category}\n• Dominans Akışı: ${domData.badge}\n• Trend Gücü: ${adxData.badge}\n• Likidite: ${sweepData.badge}\n• Açık Pozisyon (OI): ${oiData.badge}\n• Rölatif Güç: ${rsBadge}\n• 15M Hacim: ${volData.badge}\n• Smart Money (SMC): ${smc.smcBadge}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(msg);
                 signalSentInThisCycle = true;
             }
@@ -1682,7 +1868,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda" : "⚪ Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & Akıllı Önbellek: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & Binance Otomatik Emir: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -1692,17 +1878,22 @@ async function scanMarket() {
 // 9. ANA ÇALIŞTIRICI & OTOMATİK BULUT GERİ YÜKLEME
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Quant V6 Pro (Smart Cache & Dominance) Başlatılıyor...");
+    console.log("🚀 ScalpPro Quant V6 Pro (Smart Cache, Dominance & Binance Auto-Trade) Başlatılıyor...");
+    await initBinanceExchangeInfo();
     await initTelegramOffset();
     const restored = await restoreFromTelegramCloudOnStartup();
     const domInit = await checkDominanceCondition();
 
+    const apiKeyStatus = (BINANCE_API_KEY && BINANCE_API_SECRET)
+        ? `✅ Aktif (${TRADE_AMOUNT_USDT} USDT İzole)`
+        : `⚠️ Pasif (Render Environment'ta BINANCE_API_KEY / SECRET eksik!)`;
+
     if (restored) {
         const curBal = calculateCurrentBalance();
-        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n⚡ <b>Akıllı Önbellek (Smart Cache):</b> Coin analizlerinde "veri bulunamadı" hatasını önleyen 4 katmanlı veri hattı devreye alındı!`);
+        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n🚀 <b>Binance Otomatik Al-Sat:</b> ${apiKeyStatus}\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n⚡ <b>Akıllı Önbellek (Smart Cache):</b> 4 katmanlı veri hattı devrede!`);
     } else {
         await syncStateToTelegramCloud();
-        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: AKILLI ÖNBELLEK & MAKRO DOMİNANS AKTİF!</b>\n\n1️⃣ <b>4 Katmanlı Veri Hattı + Smart Cache:</b> Coin sorgularında anlık API kesintilerinde bile önbellekten kesintisiz analiz sunar.\n2️⃣ <b>Çift Motorlu Dominans:</b> <code>/dominans</code> komutu ile para akışı canlı izlenir.`);
+        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: AKILLI ÖNBELLEK & BİNANCE OTOMATİK AL-SAT AKTİF!</b>\n\n1️⃣ <b>Binance Otomatik İşlem:</b> ${apiKeyStatus}\n2️⃣ <b>4 Katmanlı Veri Hattı + Smart Cache:</b> Kesintisiz analiz sunar.\n3️⃣ <b>Çift Motorlu Dominans:</b> <code>/dominans</code> komutu ile para akışı canlı izlenir.`);
     }
 
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1200); } })();
