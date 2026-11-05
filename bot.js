@@ -1,4 +1,4 @@
-Process.on('uncaughtException', (err) => {
+process.on('uncaughtException', (err) => {
     console.error('Kritik Hata Yakalandi:', err.message);
 });
 
