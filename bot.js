@@ -496,9 +496,9 @@ async function restoreFromTelegramCloudOnStartup() {
     return false;
 }
 
-// DOĞRUDAN BİNANCE ÜZERİNDEN CANLI DOMİNANS HESAPLAMA MOTORU
+// DÜZELTİLMİŞ DOĞRU ORANLI CANLI DOMİNANS MOTORU
 async function checkDominanceCondition(btcTrend = "NEUTRAL") {
-    let btcDom = 58.2; // Canlı güncel baz değer
+    let btcDom = 58.2; 
     let domChange15m = 0;
     let domChange1h = 0;
     let domIndexPrice = 0;
@@ -512,7 +512,7 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
             const open1hAgo = parseFloat(domKlines[domKlines.length - 5][1]);
 
             domIndexPrice = curClose;
-            btcDom = parseFloat((curClose * 1.35).toFixed(2)); // BTCDOM endeks çarpanı normalize edildi
+            btcDom = parseFloat((curClose / 100).toFixed(2)); // Doğru yüzdelik oran düzeltmesi
             
             const c1 = ((curClose - curOpen) / curOpen) * 100;
             const c2 = ((curClose - prevOpen) / prevOpen) * 100;
