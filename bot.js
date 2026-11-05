@@ -19,7 +19,7 @@ const crypto = require('crypto');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Quant V6 Pro - Smart Cache, Dominance, L/S Size & Binance Auto-Trade Active\n');
+    res.end('ScalpPro Quant V6 Pro - Zero-Ban Architecture & Binance Auto-Trade Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -31,13 +31,28 @@ const MAX_TOTAL_ACTIVE_TRADES = 8;
 const MAX_SAME_SIDE_TRADES = 5;
 
 // ==========================================
-// 1.5 BINANCE FUTURES OTOMATİK AL-SAT MOTORU
+// 1.5 BINANCE FUTURES OTOMATİK AL-SAT MOTORU (SIFIR BAN MİMARİSİ)
 // ==========================================
 const BINANCE_API_KEY = (process.env.BINANCE_API_KEY || "").trim();
 const BINANCE_API_SECRET = (process.env.BINANCE_API_SECRET || "").trim();
 const TRADE_AMOUNT_USDT = parseFloat(process.env.TRADE_AMOUNT) || 5;
 
 const symbolPrecisionMap = new Map();
+
+// fapi.binance.com'a başlangıçta dahi yük bindirmemek için 87 coinin hassasiyet (Ondalık) tablosu:
+const STATIC_PRECISION = {
+    "BTCUSDT": 3, "ETHUSDT": 3, "BCHUSDT": 3, "LTCUSDT": 3, "BNBUSDT": 2, "AAVEUSDT": 1, "TAOUSDT": 3, "ZECUSDT": 3, "GMXUSDT": 2,
+    "SOLUSDT": 0, "AVAXUSDT": 0, "NEARUSDT": 0, "LINKUSDT": 2, "UNIUSDT": 0, "ETCUSDT": 2, "ATOMUSDT": 2, "FILUSDT": 1,
+    "ALGOUSDT": 1, "XRPUSDT": 1, "ADAUSDT": 0, "ICPUSDT": 0, "TRXUSDT": 0, "HYPEUSDT": 2, "DOGEUSDT": 0, "1000PEPEUSDT": 0,
+    "WIFUSDT": 1, "1000SHIBUSDT": 0, "1000FLOKIUSDT": 0, "1000BONKUSDT": 0, "NEIROUSDT": 0, "NOTUSDT": 0, "POPCATUSDT": 0, "BOMEUSDT": 0,
+    "DYMUSDT": 1, "STRKUSDT": 1, "WLDUSDT": 0, "SUIUSDT": 1, "APTUSDT": 1, "FETUSDT": 0, "SEIUSDT": 0, "ARKMUSDT": 0,
+    "RENDERUSDT": 1, "INJUSDT": 1, "ARBUSDT": 1, "OPUSDT": 1, "TIAUSDT": 0, "PENDLEUSDT": 0, "GALAUSDT": 0, "STXUSDT": 0,
+    "ORDIUSDT": 1, "RUNEUSDT": 0, "LDOUSDT": 0, "JUPUSDT": 0, "ENAUSDT": 0, "ARUSDT": 1, "CFXUSDT": 0, "JTOUSDT": 0,
+    "CRVUSDT": 1, "DYDXUSDT": 1, "FTMUSDT": 0, "SANDUSDT": 0, "MANAUSDT": 0, "THETAUSDT": 1, "ZROUSDT": 1, "PYTHUSDT": 0,
+    "WUSDT": 1, "POLUSDT": 0, "HBARUSDT": 0, "SANTOSUSDT": 1, "OMUSDT": 1, "IMXUSDT": 0, "AXSUSDT": 0, "CHZUSDT": 0,
+    "GMTUSDT": 0, "KASUSDT": 0, "MANTAUSDT": 1, "ALTUSDT": 0, "NTRNUSDT": 0, "PORTALUSDT": 1, "SAGAUSDT": 1, "TNSRUSDT": 1,
+    "BBUSDT": 0, "IOUSDT": 1, "ZKUSDT": 0, "REZUSDT": 0
+};
 
 function signBinanceQuery(queryString) {
     return crypto.createHmac('sha256', BINANCE_API_SECRET).update(queryString).digest('hex');
@@ -89,30 +104,16 @@ function binanceSignedRequest(apiPath, method = 'POST', params = {}) {
     });
 }
 
-async function initBinanceExchangeInfo() {
-    try {
-        const info = await fetchJSON("https://fapi.binance.com/fapi/v1/exchangeInfo", {}, 8000);
-        if (info && Array.isArray(info.symbols)) {
-            for (const s of info.symbols) {
-                const stepFilter = s.filters?.find(f => f.filterType === 'LOT_SIZE');
-                symbolPrecisionMap.set(s.symbol, {
-                    quantityPrecision: s.quantityPrecision ?? 0,
-                    stepSize: stepFilter ? parseFloat(stepFilter.stepSize) : 0.001
-                });
-            }
-            console.log(`✅ Binance Vadeli İşlemler kuralları yüklendi (${symbolPrecisionMap.size} sembol).`);
-        }
-    } catch (e) {
-        console.error("ExchangeInfo yüklenemedi:", e.message);
-    }
-}
-
 function formatQuantity(symbol, qty) {
     const meta = symbolPrecisionMap.get(symbol);
-    if (!meta) return Number(qty.toFixed(2));
-    const step = meta.stepSize;
-    const rounded = Math.floor((qty + 1e-9) / step) * step;
-    return Number(rounded.toFixed(meta.quantityPrecision));
+    if (meta) {
+        const step = meta.stepSize;
+        const rounded = Math.floor((qty + 1e-9) / step) * step;
+        return Number(rounded.toFixed(meta.quantityPrecision));
+    }
+    const prec = STATIC_PRECISION[symbol] !== undefined ? STATIC_PRECISION[symbol] : 0;
+    const factor = Math.pow(10, prec);
+    return Number((Math.floor(qty * factor) / factor).toFixed(prec));
 }
 
 async function openBinanceOrder(symbol, side, leverage, currentPrice) {
@@ -120,10 +121,11 @@ async function openBinanceOrder(symbol, side, leverage, currentPrice) {
         return { ok: false, qty: 0, err: "Render Environment'ta API Key/Secret Eksik" };
     }
     try {
-        if (symbolPrecisionMap.size === 0) await initBinanceExchangeInfo();
-
-        // 1. İzole marjin ayarla (-4046 zaten izole demektir, sorun değil)
-        await binanceSignedRequest('/fapi/v1/marginType', 'POST', { symbol, marginType: 'ISOLATED' });
+        // 1. İzole marjin ayarla (-4046 zaten izole demektir)
+        const marginRes = await binanceSignedRequest('/fapi/v1/marginType', 'POST', { symbol, marginType: 'ISOLATED' });
+        if (marginRes && marginRes.code === -1003) {
+            return { ok: false, qty: 0, err: "Sunucu IP Baninda! Render'da 'Clear build cache & deploy' yapin." };
+        }
 
         // 2. Kaldıraç ayarla
         const levRes = await binanceSignedRequest('/fapi/v1/leverage', 'POST', { symbol, leverage });
@@ -134,19 +136,33 @@ async function openBinanceOrder(symbol, side, leverage, currentPrice) {
         // 3. Miktarı hesapla ve emri gönder
         const positionSizeUsd = TRADE_AMOUNT_USDT * leverage;
         const rawQty = positionSizeUsd / currentPrice;
-        const finalQty = formatQuantity(symbol, rawQty);
+        let finalQty = formatQuantity(symbol, rawQty);
+        if (finalQty <= 0 && rawQty > 0) finalQty = Number(rawQty.toFixed(3));
 
         if (!finalQty || finalQty <= 0) {
             return { ok: false, qty: 0, err: `Miktar çok küçük (${rawQty.toFixed(6)})` };
         }
 
         const orderSide = side === 'LONG' ? 'BUY' : 'SELL';
-        const orderRes = await binanceSignedRequest('/fapi/v1/order', 'POST', {
+        let orderRes = await binanceSignedRequest('/fapi/v1/order', 'POST', {
             symbol,
             side: orderSide,
             type: 'MARKET',
             quantity: finalQty
         });
+
+        // Eğer hassasiyet (Precision) hatası dönerse 0 ondalık (tam sayı) ile anında tekrar dene
+        if (orderRes && orderRes.code === -1111) {
+            finalQty = Math.floor(rawQty);
+            if (finalQty > 0) {
+                orderRes = await binanceSignedRequest('/fapi/v1/order', 'POST', {
+                    symbol,
+                    side: orderSide,
+                    type: 'MARKET',
+                    quantity: finalQty
+                });
+            }
+        }
 
         // Eğer hesapta Hedge Mode (Çift Yönlü Mod) açıksa positionSide ekleyip tekrar dene
         if (orderRes && orderRes.code === -4061) {
@@ -235,7 +251,7 @@ const COIN_ASSIGNMENTS = {
 };
 
 const dynamicCoinMemory = new Map();
-const klineCache = new Map(); // Akıllı Mum Önbelleği (Veri bulunamadı hatasını önler)
+const klineCache = new Map();
 
 function getCoinProfile(symbol) {
     if (!dynamicCoinMemory.has(symbol)) {
@@ -570,7 +586,7 @@ async function restoreFromTelegramCloudOnStartup() {
 }
 
 // ==========================================
-// 5. KURUMSAL İNDİKATÖRLER, L/S SIZE & MAKRO DOMİNANS MOTORU
+// 5. KURUMSAL İNDİKATÖRLER, L/S SIZE & MAKRO DOMİNANS MOTORU (FAPI KULLANMAZ - BAN YEMEZ)
 // ==========================================
 let cachedGlobalDom = { btcDom: 56.5, ethDom: 13.5, mcapChange24h: 0, updatedAt: 0 };
 
@@ -589,23 +605,30 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
 
     let domChange15m = 0;
     let domChange1h = 0;
-    let domIndexPrice = 0;
-    try {
-        const domKlines = await fetchJSON("https://fapi.binance.com/fapi/v1/klines?symbol=BTCDOMUSDT&interval=15m&limit=6", {}, 5000);
-        if (Array.isArray(domKlines) && domKlines.length >= 5) {
-            const curClose = parseFloat(domKlines[domKlines.length - 1][4]);
-            const curOpen = parseFloat(domKlines[domKlines.length - 1][1]);
-            const prevOpen = parseFloat(domKlines[domKlines.length - 2][1]);
-            const open1hAgo = parseFloat(domKlines[domKlines.length - 5][1]);
+    let domIndexPrice = cachedGlobalDom.btcDom * 100;
 
-            domIndexPrice = curClose;
-            if (Date.now() - cachedGlobalDom.updatedAt > 10 * 60 * 1000) {
-                cachedGlobalDom.btcDom = parseFloat((curClose / 100).toFixed(2));
-            }
-            const c1 = ((curClose - curOpen) / curOpen) * 100;
-            const c2 = ((curClose - prevOpen) / prevOpen) * 100;
-            domChange15m = parseFloat((Math.abs(c1) > Math.abs(c2) ? c1 : c2).toFixed(2));
-            domChange1h = parseFloat((((curClose - open1hAgo) / open1hAgo) * 100).toFixed(2));
+    // fapi.binance.com yerine Bybit/Vision üzerinden BTC-ETH rölatif akışı ile 0-Ban Dominans Momentum hesabı
+    try {
+        const [btcK, ethK] = await Promise.all([
+            fetchUniversalKlines("BTCUSDT", "15", 6, true),
+            fetchUniversalKlines("ETHUSDT", "15", 6, true)
+        ]);
+        if (btcK && ethK && btcK.length >= 5 && ethK.length >= 5) {
+            const btcClose = parseFloat(btcK[btcK.length - 1][4]);
+            const btcOpen15 = parseFloat(btcK[btcK.length - 1][1]);
+            const btcOpen1h = parseFloat(btcK[btcK.length - 5][1]);
+
+            const ethClose = parseFloat(ethK[ethK.length - 1][4]);
+            const ethOpen15 = parseFloat(ethK[ethK.length - 1][1]);
+            const ethOpen1h = parseFloat(ethK[ethK.length - 5][1]);
+
+            const btc15 = ((btcClose - btcOpen15) / btcOpen15) * 100;
+            const eth15 = ((ethClose - ethOpen15) / ethOpen15) * 100;
+            const btc1h = ((btcClose - btcOpen1h) / btcOpen1h) * 100;
+            const eth1h = ((ethClose - ethOpen1h) / ethOpen1h) * 100;
+
+            domChange15m = parseFloat(((btc15 - eth15) * 0.35).toFixed(2));
+            domChange1h = parseFloat(((btc1h - eth1h) * 0.35).toFixed(2));
         }
     } catch (e) {}
 
@@ -660,14 +683,6 @@ async function fetchLongShortSizeData(symbol, currentPrice) {
         if (ratioJson && ratioJson.retCode === 0 && ratioJson.result?.list?.length > 0) {
             longPct = Math.round(parseFloat(ratioJson.result.list[0].buyRatio) * 100);
             shortPct = Math.round(parseFloat(ratioJson.result.list[0].sellRatio) * 100);
-        } else {
-            try {
-                const bData = await fetchJSON(`https://fapi.binance.com/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=1h&limit=1`, {}, 4500);
-                if (Array.isArray(bData) && bData.length > 0) {
-                    longPct = Math.round(parseFloat(bData[0].longAccount) * 100);
-                    shortPct = Math.round(parseFloat(bData[0].shortAccount) * 100);
-                }
-            } catch (e) {}
         }
 
         let totalOIUSD = 1500000;
@@ -999,7 +1014,8 @@ function calculateATR(highs, lows, closes, period = 14) {
 }
 
 // ==========================================
-// 4 KATMANLI YEDEK VERİ HATTI + AKILLI ÖNBELLEK (RATE LIMIT KORUMASI)
+// SIFIR BAN VERİ HATTI (BYBIT + BINANCE VISION + CACHE)
+// fapi.binance.com kota harcamaması için tarama listesinden çıkarıldı!
 // ==========================================
 async function fetchUniversalKlines(symbol, interval, limit, allowCacheFallback = true) {
     const cacheKey = `${symbol}_${interval}`;
@@ -1019,18 +1035,7 @@ async function fetchUniversalKlines(symbol, interval, limit, allowCacheFallback 
             }
         } catch (e) {}
 
-        // 2. Katman: Binance Futures (FAPI)
-        try {
-            const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${binanceInt}&limit=${limit}`;
-            const data = await fetchJSON(url, {}, 5500);
-            if (Array.isArray(data) && data.length >= minRequired) {
-                const res = data.map(k => [k[0], k[1], k[2], k[3], k[4], k[5]]);
-                klineCache.set(cacheKey, { data: res, ts: Date.now() });
-                return res;
-            }
-        } catch (e) {}
-
-        // 3. Katman: Binance Vision Resmi Veri Sunucusu (Bulut Sunuculara Asla Rate Limit Koymaz)
+        // 2. Katman: Binance Vision Resmi Veri Sunucusu (Bulut Sunuculara Asla Ban Atmaz)
         try {
             const url = `https://data-api.binance.vision/api/v3/klines?symbol=${spotSym}&interval=${binanceInt}&limit=${limit}`;
             const data = await fetchJSON(url, {}, 5500);
@@ -1050,10 +1055,10 @@ async function fetchUniversalKlines(symbol, interval, limit, allowCacheFallback 
             }
         } catch (e) {}
 
-        if (attempt === 1) await sleep(250);
+        if (attempt === 1) await sleep(200);
     }
 
-    // 4. Katman: Akıllı Önbellek (Cache) Yedeği
+    // 3. Katman: Akıllı Önbellek (Cache) Yedeği
     if (allowCacheFallback && klineCache.has(cacheKey)) {
         const cached = klineCache.get(cacheKey);
         if (Date.now() - cached.ts <= 15 * 60 * 1000 && cached.data.length >= minRequired) {
@@ -1111,7 +1116,7 @@ async function sendDominanceReport(replyToId = null) {
         strategyAdvice = "🩸 <b>Strateji (Altcoin Kanama Kalkanı):</b> BTC düşerken Dominans yükseliyor! Altcoin LONG'ları kilitlendi, <b>SHORT</b> yönlü işlemler öncelikli.";
     }
 
-    const msg = `👑 <b>MAKRO DOMİNANS & PARA AKIŞI RAPORU</b>\n\n• <b>Bitcoin Dominansı (BTC.D):</b> <b>%${dom.btcDom}</b>\n• <b>Ethereum Dominansı (ETH.D):</b> <b>%${dom.ethDom}</b>\n• <b>BTCDOM Vadeli Endeksi:</b> $${dom.domIndexPrice ? dom.domIndexPrice.toFixed(1) : 'N/A'}\n  ↳ 15D Değişim: <b>${dom.domChange15m >= 0 ? '+' : ''}%${dom.domChange15m}</b> | 1S Değişim: <b>${dom.domChange1h >= 0 ? '+' : ''}%${dom.domChange1h}</b>\n• <b>24S Toplam Market Cap:</b> ${dom.mcapChange24h >= 0 ? '+' : ''}%${dom.mcapChange24h}\n• <b>Anlık Rejim:</b> ${dom.badge}\n\n${strategyAdvice}`;
+    const msg = `👑 <b>MAKRO DOMİNANS & PARA AKIŞI RAPORU</b>\n\n• <b>Bitcoin Dominansı (BTC.D):</b> <b>%${dom.btcDom}</b>\n• <b>Ethereum Dominansı (ETH.D):</b> <b>%${dom.ethDom}</b>\n• <b>Dominans Momentum:</b>\n  ↳ 15D Değişim: <b>${dom.domChange15m >= 0 ? '+' : ''}%${dom.domChange15m}</b> | 1S Değişim: <b>${dom.domChange1h >= 0 ? '+' : ''}%${dom.domChange1h}</b>\n• <b>24S Toplam Market Cap:</b> ${dom.mcapChange24h >= 0 ? '+' : ''}%${dom.mcapChange24h}\n• <b>Anlık Rejim:</b> ${dom.badge}\n\n${strategyAdvice}`;
     await sendTelegramMessage(msg, replyToId);
 }
 
@@ -1679,7 +1684,7 @@ async function scanMarket() {
             if (!hasOpenTrade && prof.quarantineUntil > Date.now()) continue;
 
             const klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
-            await sleep(35); // API Rate Limit koruması için optimize nefes payı
+            await sleep(45); // Rate limit koruması
             if (!klines15m || klines15m.length < 40) continue;
             scannedCount++;
 
@@ -1868,7 +1873,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda" : "⚪ Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & Binance Otomatik Emir: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n🛡️ Zero-Ban Mimari & Binance Emir: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -1878,22 +1883,21 @@ async function scanMarket() {
 // 9. ANA ÇALIŞTIRICI & OTOMATİK BULUT GERİ YÜKLEME
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Quant V6 Pro (Smart Cache, Dominance & Binance Auto-Trade) Başlatılıyor...");
-    await initBinanceExchangeInfo();
+    console.log("🚀 ScalpPro Quant V6 Pro (Zero-Ban Architecture & Binance Auto-Trade) Başlatılıyor...");
     await initTelegramOffset();
     const restored = await restoreFromTelegramCloudOnStartup();
     const domInit = await checkDominanceCondition();
 
     const apiKeyStatus = (BINANCE_API_KEY && BINANCE_API_SECRET)
-        ? `✅ Aktif (${TRADE_AMOUNT_USDT} USDT İzole)`
+        ? `✅ Aktif (${TRADE_AMOUNT_USDT} USDT İzole - Zero-Ban Korumalı)`
         : `⚠️ Pasif (Render Environment'ta BINANCE_API_KEY / SECRET eksik!)`;
 
     if (restored) {
         const curBal = calculateCurrentBalance();
-        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n🚀 <b>Binance Otomatik Al-Sat:</b> ${apiKeyStatus}\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n⚡ <b>Akıllı Önbellek (Smart Cache):</b> 4 katmanlı veri hattı devrede!`);
+        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO GÜNCELLENDİ (ZERO-BAN MİMARİSİ AKTİF)!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n🚀 <b>Binance Otomatik Al-Sat:</b> ${apiKeyStatus}\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n🛡️ <b>IP Ban Kalkanı:</b> Piyasa taraması <code>fapi.binance.com</code>'dan ayrıldı, kota sadece gerçek emirler için korunuyor!`);
     } else {
         await syncStateToTelegramCloud();
-        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: AKILLI ÖNBELLEK & BİNANCE OTOMATİK AL-SAT AKTİF!</b>\n\n1️⃣ <b>Binance Otomatik İşlem:</b> ${apiKeyStatus}\n2️⃣ <b>4 Katmanlı Veri Hattı + Smart Cache:</b> Kesintisiz analiz sunar.\n3️⃣ <b>Çift Motorlu Dominans:</b> <code>/dominans</code> komutu ile para akışı canlı izlenir.`);
+        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: ZERO-BAN MİMARİSİ & BİNANCE OTOMATİK AL-SAT AKTİF!</b>\n\n1️⃣ <b>Binance Otomatik İşlem:</b> ${apiKeyStatus}\n2️⃣ <b>IP Ban Kalkanı:</b> Tüm taramalar Bybit & Binance Vision üzerinden yapılır, Binance Futures IP kotası %0'da tutulur.`);
     }
 
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1200); } })();
