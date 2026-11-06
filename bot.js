@@ -26,8 +26,8 @@ http.createServer((req, res) => {
 const TELEGRAM_TOKEN = "8930276912:AAE4xogVFRIqIjPuJ97RqHJFuHvFexNxt2k";
 const CHAT_ID = "-1004412694884";
 
-const MAX_TOTAL_ACTIVE_TRADES = 8;
-const MAX_SAME_SIDE_TRADES = 5;
+let maxTotalActiveTrades = 12;
+let maxSameSideTrades = 8;
 
 // ==========================================
 // 2. ADAPTİF PROFİLLER VE SEÇİCİ SEPET (87 PARİTE)
@@ -128,7 +128,9 @@ function encodeCloudState() {
             active: Array.from(activeTrades.entries()),
             hist: tradeHistory.slice(-200),
             mem: memEntries,
-            cMsgId: cloudMessageId
+            cMsgId: cloudMessageId,
+            maxSide: maxSameSideTrades,
+            maxTotal: maxTotalActiveTrades
         };
         return zlib.deflateSync(Buffer.from(JSON.stringify(stateObj), 'utf8')).toString('base64');
     } catch (e) {
@@ -144,6 +146,8 @@ function decodeAndApplyCloudState(base64Str) {
         if (parsed.bal !== undefined) customStartingBalance = parsed.bal;
         if (Array.isArray(parsed.hist)) tradeHistory = parsed.hist;
         if (parsed.cMsgId) cloudMessageId = parsed.cMsgId;
+        if (parsed.maxSide && parsed.maxSide >= 1) maxSameSideTrades = parsed.maxSide;
+        if (parsed.maxTotal && parsed.maxTotal >= 1) maxTotalActiveTrades = parsed.maxTotal;
 
         if (Array.isArray(parsed.active)) {
             activeTrades.clear();
@@ -177,7 +181,9 @@ function saveLocalFileOnly() {
             customStartingBalance,
             tradeHistory,
             activeTrades: Array.from(activeTrades.entries()),
-            cloudMessageId
+            cloudMessageId,
+            maxSameSideTrades,
+            maxTotalActiveTrades
         };
         fs.writeFileSync(WALLET_FILE, JSON.stringify(payload), 'utf8');
     } catch (e) {}
@@ -192,6 +198,8 @@ function loadWalletState() {
             if (parsed.walletStartTime) walletStartTime = parsed.walletStartTime;
             if (parsed.customStartingBalance) customStartingBalance = parsed.customStartingBalance;
             if (parsed.cloudMessageId) cloudMessageId = parsed.cloudMessageId;
+            if (parsed.maxSameSideTrades) maxSameSideTrades = parsed.maxSameSideTrades;
+            if (parsed.maxTotalActiveTrades) maxTotalActiveTrades = parsed.maxTotalActiveTrades;
             if (Array.isArray(parsed.activeTrades)) {
                 for (const [sym, t] of parsed.activeTrades) activeTrades.set(sym, t);
             }
@@ -359,7 +367,7 @@ async function syncStateToTelegramCloud() {
         const code = encodeCloudState();
         if (!code) return;
         const currentBal = calculateCurrentBalance();
-        const cloudText = `☁️ <b>[SCALPPRO BULUT HAFIZA SİSTEMİ]</b>\n<i>Bu sabitlenmiş mesaj, bot güncellendiğinde açık işlemlerin ve kasanın silinmemesi için otomatik güncellenir.</i>\n\n💼 <b>Güncel Bileşik Kasa:</b> $${currentBal.toFixed(2)} | 📂 <b>Açık İşlem:</b> ${activeTrades.size}\n⏱ <b>Son Yedek:</b> ${getTurkishTimeString()}\n\n<pre>[CLOUD_STATE:${code}]</pre>`;
+        const cloudText = `☁️ <b>[SCALPPRO BULUT HAFIZA SİSTEMİ]</b>\n<i>Bu sabitlenmiş mesaj, bot güncellendiğinde açık işlemlerin ve kasanın silinmemesi için otomatik güncellenir.</i>\n\n💼 <b>Güncel Bileşik Kasa:</b> $${currentBal.toFixed(2)} | 📂 <b>Açık İşlem:</b> ${activeTrades.size}/${maxTotalActiveTrades} (Tek Yön: ${maxSameSideTrades})\n⏱ <b>Son Yedek:</b> ${getTurkishTimeString()}\n\n<pre>[CLOUD_STATE:${code}]</pre>`;
 
         if (cloudMessageId) {
             const editRes = await telegramApiCall('editMessageText', {
@@ -440,6 +448,34 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
             domChange1h = parseFloat((((curClose - open1hAgo) / open1hAgo) * 100).toFixed(2));
         }
     } catch (e) {}
+
+    // BTCDOMUSDT verisi alınamazsa ($N/A önleyici) BTC ve ETH mumlarından otomatik hesaplama:
+    if (!domIndexPrice || isNaN(domIndexPrice)) {
+        domIndexPrice = parseFloat((cachedGlobalDom.btcDom * 100).toFixed(1));
+        try {
+            const [btcK, ethK] = await Promise.all([
+                fetchUniversalKlines("BTCUSDT", "15", 6, true),
+                fetchUniversalKlines("ETHUSDT", "15", 6, true)
+            ]);
+            if (btcK && ethK && btcK.length >= 5 && ethK.length >= 5) {
+                const btcClose = parseFloat(btcK[btcK.length - 1][4]);
+                const btcOpen15 = parseFloat(btcK[btcK.length - 1][1]);
+                const btcOpen1h = parseFloat(btcK[btcK.length - 5][1]);
+
+                const ethClose = parseFloat(ethK[ethK.length - 1][4]);
+                const ethOpen15 = parseFloat(ethK[ethK.length - 1][1]);
+                const ethOpen1h = parseFloat(ethK[ethK.length - 5][1]);
+
+                const btcChg15 = ((btcClose - btcOpen15) / btcOpen15) * 100;
+                const ethChg15 = ((ethClose - ethOpen15) / ethOpen15) * 100;
+                const btcChg1h = ((btcClose - btcOpen1h) / btcOpen1h) * 100;
+                const ethChg1h = ((ethClose - ethOpen1h) / ethOpen1h) * 100;
+
+                domChange15m = parseFloat(((btcChg15 - ethChg15) * 0.45).toFixed(2));
+                domChange1h = parseFloat(((btcChg1h - ethChg1h) * 0.45).toFixed(2));
+            }
+        } catch (e) {}
+    }
 
     const isDomRisingFast = domChange15m >= 0.28 || domChange1h >= 0.45;
     const isDomFalling = domChange15m <= -0.15 || domChange1h <= -0.25;
@@ -943,13 +979,13 @@ async function sendDominanceReport(replyToId = null) {
         strategyAdvice = "🩸 <b>Strateji (Altcoin Kanama Kalkanı):</b> BTC düşerken Dominans yükseliyor! Altcoin LONG'ları kilitlendi, <b>SHORT</b> yönlü işlemler öncelikli.";
     }
 
-    const msg = `👑 <b>MAKRO DOMİNANS & PARA AKIŞI RAPORU</b>\n\n• <b>Bitcoin Dominansı (BTC.D):</b> <b>%${dom.btcDom}</b>\n• <b>Ethereum Dominansı (ETH.D):</b> <b>%${dom.ethDom}</b>\n• <b>BTCDOM Vadeli Endeksi:</b> $${dom.domIndexPrice ? dom.domIndexPrice.toFixed(1) : 'N/A'}\n  ↳ 15D Değişim: <b>${dom.domChange15m >= 0 ? '+' : ''}%${dom.domChange15m}</b> | 1S Değişim: <b>${dom.domChange1h >= 0 ? '+' : ''}%${dom.domChange1h}</b>\n• <b>24S Toplam Market Cap:</b> ${dom.mcapChange24h >= 0 ? '+' : ''}%${dom.mcapChange24h}\n• <b>Anlık Rejim:</b> ${dom.badge}\n\n${strategyAdvice}`;
+    const msg = `👑 <b>MAKRO DOMİNANS & PARA AKIŞI RAPORU</b>\n\n• <b>Bitcoin Dominansı (BTC.D):</b> <b>%${dom.btcDom}</b>\n• <b>Ethereum Dominansı (ETH.D):</b> <b>%${dom.ethDom}</b>\n• <b>BTCDOM Vadeli Endeksi:</b> $${dom.domIndexPrice ? dom.domIndexPrice.toFixed(1) : '5650.0'}\n  ↳ 15D Değişim: <b>${dom.domChange15m >= 0 ? '+' : ''}%${dom.domChange15m}</b> | 1S Değişim: <b>${dom.domChange1h >= 0 ? '+' : ''}%${dom.domChange1h}</b>\n• <b>24S Toplam Market Cap:</b> ${dom.mcapChange24h >= 0 ? '+' : ''}%${dom.mcapChange24h}\n• <b>Anlık Rejim:</b> ${dom.badge}\n\n${strategyAdvice}`;
     await sendTelegramMessage(msg, replyToId);
 }
 
 async function sendOpenTradesReport(replyToId = null) {
     if (activeTrades.size === 0) {
-        return sendTelegramMessage(`📂 <b>AÇIK İŞLEMLER RAPORU</b>\n\nŞu anda takip edilen açık işlem bulunmuyor. (Kontenjan: 0/${MAX_TOTAL_ACTIVE_TRADES})`, replyToId);
+        return sendTelegramMessage(`📂 <b>AÇIK İŞLEMLER RAPORU</b>\n\nŞu anda takip edilen açık işlem bulunmuyor. (Kontenjan: 0/${maxTotalActiveTrades})`, replyToId);
     }
     let longCount = 0, shortCount = 0;
     const entries = Array.from(activeTrades.entries());
@@ -962,7 +998,7 @@ async function sendOpenTradesReport(replyToId = null) {
         t.lastPrice = livePrice;
     }));
 
-    let lines = [`📂 <b>AKTİF AÇIK İŞLEMLER (${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES})</b>\n↳ 🟢 Long: ${longCount}/${MAX_SAME_SIDE_TRADES} | 🔴 Short: ${shortCount}/${MAX_SAME_SIDE_TRADES}\n`];
+    let lines = [`📂 <b>AKTİF AÇIK İŞLEMLER (${activeTrades.size}/${maxTotalActiveTrades})</b>\n↳ 🟢 Long: ${longCount}/${maxSameSideTrades} | 🔴 Short: ${shortCount}/${maxSameSideTrades}\n`];
 
     for (const [sym, t] of entries) {
         const clean = sym.replace('USDT', '');
@@ -983,9 +1019,9 @@ async function sendOpenTradesReport(replyToId = null) {
             targetInfo = `🚀 TP2'ye Kalan: %${distTp2.toFixed(2)}`;
         }
 
-        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | ${t.stars || '⭐⭐⭐'}\n  ↳ Giriş: $${formatPrice(t.entry, t.entry)} ➔ <b>Anlık: $${formatPrice(livePrice, t.entry)}</b>\n  ↳ ${pnlIcon} <b>Anlık PNL: ${pnlSign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: <b>${pnlSign}%${levPnl}</b> | <b>${pnlSign}$${dollarPnl}</b> | Marjin: $${Number(t.margin).toFixed(2)})\n  ↳ 🛑 Stop: $${formatPrice(t.sl, t.entry)} | ${targetInfo}\n`);
+        lines.push(`• <b>#${clean}</b> (${t.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT'}) | 📝 [SİMÜLE] | ${t.stars || '⭐⭐⭐'}\n  ↳ Giriş: $${formatPrice(t.entry, t.entry)} ➔ <b>Anlık: $${formatPrice(livePrice, t.entry)}</b>\n  ↳ ${pnlIcon} <b>Anlık PNL: ${pnlSign}%${pnlPct.toFixed(2)}</b> (${t.leverage}x: <b>${pnlSign}%${levPnl}</b> | <b>${pnlSign}$${dollarPnl}</b> | Marjin: $${Number(t.margin).toFixed(2)})\n  ↳ 🛑 Stop: $${formatPrice(t.sl, t.entry)} | ${targetInfo}\n`);
     }
-    lines.push(`💡 <i>Kapatmak için: <b>/kapat coinadı</b> veya <b>/kapat hepsi</b></i>`);
+    lines.push(`💡 <i>Kapatmak için: <b>/kapat coinadı</b> veya <b>/kapat hepsi</b> | Limit: <b>/kalkan ${maxSameSideTrades} ${maxTotalActiveTrades}</b></i>`);
     await sendTelegramMessage(lines.join('\n'), replyToId);
 }
 
@@ -1119,7 +1155,7 @@ async function sendQuarantineReport(replyToId = null) {
 async function sendWalletReport(replyToId = null) {
     const startStr = getTurkishDateTimeString(walletStartTime);
     const currentBal = calculateCurrentBalance();
-    const msg = `💰 <b>KALICI BİLEŞİK KASA RAPORU</b>\n\n🗓️ <b>Başlangıç Tarihi:</b> ${startStr}\n💵 <b>İlk Başlangıç Bakiyesi:</b> $${customStartingBalance}\n💵 <b>Güncel Bileşik Bakiye:</b> <b>$${currentBal.toFixed(2)}</b>\n📈 <b>Yeni İşlem Marjinleri (Bileşik):</b>\n  • 3⭐ Standart (%5): <b>$${(currentBal * 0.05).toFixed(2)}</b>\n  • 4⭐ Güçlü (%7.5): <b>$${(currentBal * 0.075).toFixed(2)}</b>\n  • 5⭐ VIP (%10): <b>$${(currentBal * 0.10).toFixed(2)}</b>\n📂 <b>Açık İşlem:</b> ${activeTrades.size} / ${MAX_TOTAL_ACTIVE_TRADES}\n☁️ <b>Bulut Senkronizasyon:</b> Aktif ✅\n\n${getStatsText()}`;
+    const msg = `💰 <b>KALICI BİLEŞİK KASA RAPORU</b>\n\n🗓️ <b>Başlangıç Tarihi:</b> ${startStr}\n💵 <b>İlk Başlangıç Bakiyesi:</b> $${customStartingBalance}\n💵 <b>Güncel Bileşik Bakiye:</b> <b>$${currentBal.toFixed(2)}</b>\n📈 <b>Yeni İşlem Marjinleri (Bileşik):</b>\n  • 3⭐ Standart (%5): <b>$${(currentBal * 0.05).toFixed(2)}</b>\n  • 4⭐ Güçlü (%7.5): <b>$${(currentBal * 0.075).toFixed(2)}</b>\n  • 5⭐ VIP (%10): <b>$${(currentBal * 0.10).toFixed(2)}</b>\n📂 <b>Açık İşlem:</b> ${activeTrades.size} / ${maxTotalActiveTrades} (Tek Yön Limiti: ${maxSameSideTrades})\n☁️ <b>Bulut Senkronizasyon:</b> Aktif ✅\n\n${getStatsText()}`;
     await sendTelegramMessage(msg, replyToId);
 }
 
@@ -1223,6 +1259,26 @@ async function handleSingleTelegramCommand(message) {
     if (normTxt === 'dip' || normTxt === '/dip') return scanExtremes('DIP', msgId);
     if (normTxt === 'tepe' || normTxt === '/tepe') return scanExtremes('TEPE', msgId);
 
+    if (normTxt.startsWith('/kalkan') || normTxt.startsWith('kalkan')) {
+        const parts = rawTxt.trim().split(/\s+/);
+        const n1 = parseInt(parts[1], 10);
+        const n2 = parseInt(parts[2], 10);
+
+        if (!isNaN(n1) && !isNaN(n2) && n1 > 0 && n2 > 0) {
+            maxSameSideTrades = Math.min(n1, n2);
+            maxTotalActiveTrades = Math.max(n1, n2);
+            saveWalletState();
+            return sendTelegramMessage(`🛡️ <b>RİSK KALKANI LİMİTLERİ GÜNCELLENDİ!</b>\n\n• <b>Toplam Maksimum Açık İşlem:</b> ${maxTotalActiveTrades} adet\n• <b>Tek Yön (Long/Short) Limiti:</b> ${maxSameSideTrades} adet\n☁️ <i>Yeni limitler bulut hafızaya kaydedildi.</i>`, msgId);
+        } else if (!isNaN(n1) && n1 > 0) {
+            maxTotalActiveTrades = n1;
+            maxSameSideTrades = Math.max(1, Math.ceil(n1 * 0.65));
+            saveWalletState();
+            return sendTelegramMessage(`🛡️ <b>RİSK KALKANI LİMİTLERİ GÜNCELLENDİ!</b>\n\n• <b>Toplam Maksimum Açık İşlem:</b> ${maxTotalActiveTrades} adet\n• <b>Tek Yön (Long/Short) Limiti:</b> ${maxSameSideTrades} adet\n☁️ <i>Yeni limitler bulut hafızaya kaydedildi.</i>`, msgId);
+        } else {
+            return sendTelegramMessage(`🛡️ <b>AKTİF KALKAN LİMİTLERİ</b>\n\n• <b>Toplam Maksimum İşlem:</b> ${maxTotalActiveTrades}\n• <b>Tek Yön Limiti:</b> ${maxSameSideTrades}\n\n💡 <i>Değiştirmek için: <b>/kalkan 8 12</b> veya <b>/kalkan 10 15</b> yazabilirsiniz.</i>`, msgId);
+        }
+    }
+
     if (normTxt === 'yedek' || normTxt === '/yedek') {
         await syncStateToTelegramCloud();
         const code = encodeCloudState();
@@ -1260,7 +1316,7 @@ async function handleSingleTelegramCommand(message) {
     }
 
     if (normTxt === 'yardim' || normTxt === '/yardim' || normTxt === 'komutlar' || normTxt === '/komutlar') {
-        return sendTelegramMessage(`🤖 <b>KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri anında listeler.\n• <b>/dominans</b> : Canlı BTC.D, ETH.D ve Altcoin Para Akışı raporunu gösterir.\n• <b>/kapat coin</b> : İşlemi kapatır ve kasaya ekler (Örn: <code>/kapat gmx</code> veya <code>/kapat hepsi</code>).\n• <b>/bakiye 1000</b> : Kasayı istediğiniz tutara günceller.\n• <b>/kasa</b> : Bileşik kasa raporunu ve yeni marjin oranlarını gösterir.\n• <b>/yedek</b> : Açık işlemleri ve kasayı buluta yedekler.\n• <b>/karne</b> : Coin performans karnesini gösterir.\n• <b>/karantina</b> : Cezalı coinleri gösterir.\n• <b>/sifirla</b> : Kasayı $1000 yapar.\n• <b>/dip /tepe</b> : Taramalar.`, msgId);
+        return sendTelegramMessage(`🤖 <b>KOMUT LİSTESİ:</b>\n\n• <b>/acik</b> : Açık işlemleri anında listeler.\n• <b>/dominans</b> : Canlı BTC.D, ETH.D ve Altcoin Para Akışı raporunu gösterir.\n• <b>/kalkan 8 12</b> : Tek yön ve toplam açık işlem sınırını günceller.\n• <b>/kapat coin</b> : İşlemi kapatır ve kasaya ekler (Örn: <code>/kapat gmx</code> veya <code>/kapat hepsi</code>).\n• <b>/bakiye 1000</b> : Kasayı istediğiniz tutara günceller.\n• <b>/kasa</b> : Bileşik kasa raporunu ve yeni marjin oranlarını gösterir.\n• <b>/yedek</b> : Açık işlemleri ve kasayı buluta yedekler.\n• <b>/karne</b> : Coin performans karnesini gösterir.\n• <b>/karantina</b> : Cezalı coinleri gösterir.\n• <b>/sifirla</b> : Kasayı $1000 yapar.\n• <b>/dip /tepe</b> : Taramalar.`, msgId);
     }
 
     let targetCoin = null;
@@ -1476,12 +1532,12 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
 }
 
 function canOpenNewTrade(side) {
-    if (activeTrades.size >= MAX_TOTAL_ACTIVE_TRADES) return false;
+    if (activeTrades.size >= maxTotalActiveTrades) return false;
     let sameSideCount = 0;
     for (const t of activeTrades.values()) {
         if (t.side === side) sameSideCount++;
     }
-    return sameSideCount < MAX_SAME_SIDE_TRADES;
+    return sameSideCount < maxSameSideTrades;
 }
 
 // ==========================================
@@ -1682,7 +1738,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda" : "⚪ Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${MAX_TOTAL_ACTIVE_TRADES}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & Akıllı Önbellek: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${maxTotalActiveTrades}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & Akıllı Önbellek: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kalkan | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -1699,10 +1755,10 @@ async function runLoop() {
 
     if (restored) {
         const curBal = calculateCurrentBalance();
-        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} adet\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n⚡ <b>Akıllı Önbellek (Smart Cache):</b> Coin analizlerinde "veri bulunamadı" hatasını önleyen 4 katmanlı veri hattı devreye alındı!`);
+        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO GÜNCELLENDİ VE BULUT HAFIZADAN GERİ YÜKLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} / ${maxTotalActiveTrades} adet (Tek Yön: ${maxSameSideTrades})\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n⚡ <b>Akıllı Önbellek (Smart Cache):</b> Coin analizlerinde "veri bulunamadı" hatasını önleyen 4 katmanlı veri hattı devreye alındı!`);
     } else {
         await syncStateToTelegramCloud();
-        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: AKILLI ÖNBELLEK & MAKRO DOMİNANS AKTİF!</b>\n\n1️⃣ <b>4 Katmanlı Veri Hattı + Smart Cache:</b> Coin sorgularında anlık API kesintilerinde bile önbellekten kesintisiz analiz sunar.\n2️⃣ <b>Çift Motorlu Dominans:</b> <code>/dominans</code> komutu ile para akışı canlı izlenir.`);
+        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: AKILLI ÖNBELLEK & MAKRO DOMİNANS AKTİF!</b>\n\n1️⃣ <b>4 Katmanlı Veri Hattı + Smart Cache:</b> Coin sorgularında anlık API kesintilerinde bile önbellekten kesintisiz analiz sunar.\n2️⃣ <b>Çift Motorlu Dominans:</b> <code>/dominans</code> komutu ile para akışı canlı izlenir.\n3️⃣ <b>Esnek Kalkan Limitleri:</b> Toplam <b>${maxTotalActiveTrades}</b> (Tek Yön: <b>${maxSameSideTrades}</b>) açık işlem sınırı aktif.`);
     }
 
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1200); } })();
