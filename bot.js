@@ -449,7 +449,6 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
         }
     } catch (e) {}
 
-    // BTCDOMUSDT verisi alınamazsa ($N/A önleyici) BTC ve ETH mumlarından otomatik hesaplama:
     if (!domIndexPrice || isNaN(domIndexPrice)) {
         domIndexPrice = parseFloat((cachedGlobalDom.btcDom * 100).toFixed(1));
         try {
@@ -970,16 +969,97 @@ async function sendDominanceReport(replyToId = null) {
     const btc = await checkBtcCondition();
     const dom = await checkDominanceCondition(btc.btcTrend);
 
-    let strategyAdvice = "⚖️ <b>Strateji:</b> Hem Long hem Short yönlü kurumsal sinyaller dengeli çalışıyor.";
-    if (dom.regime === "ALT_SEASON_FLOW") {
-        strategyAdvice = "🟢 <b>Strateji (Altcoin Ralli Akışı):</b> Sermaye BTC'den altcoinlere akıyor! Altcoin <b>LONG</b> işlemleri ekstra puan alıyor.";
-    } else if (dom.regime === "BTC_SUCKING_LIQUIDITY") {
-        strategyAdvice = "⚠️ <b>Strateji (BTC Likidite Emiyor):</b> Dominans sert yükseliyor. Sıradan altcoin <b>LONG</b>'ları korumaya alındı, sadece A+ Likidite Avı ve <b>SHORT</b> fırsatları açık.";
-    } else if (dom.regime === "ALT_BLEED") {
-        strategyAdvice = "🩸 <b>Strateji (Altcoin Kanama Kalkanı):</b> BTC düşerken Dominans yükseliyor! Altcoin LONG'ları kilitlendi, <b>SHORT</b> yönlü işlemler öncelikli.";
+    const othersDom = Math.max(0, parseFloat((100 - dom.btcDom - dom.ethDom).toFixed(2)));
+
+    const makeBar = (pct, maxVal = 100) => {
+        const filled = Math.min(12, Math.max(1, Math.round((pct / maxVal) * 12)));
+        return '█'.repeat(filled) + '░'.repeat(12 - filled);
+    };
+
+    let btcDomComment = "";
+    if (dom.btcDom >= 58) {
+        btcDomComment = "⚠️ <i>(Yüksek Hakimiyet: Paranın büyük kısmı BTC'de, altcoinler seçici hareket eder)</i>";
+    } else if (dom.btcDom >= 52) {
+        btcDomComment = "⚖️ <i>(Dengeli Hakimiyet: BTC ve altcoinler arasında dengeli sermaye dağılımı)</i>";
+    } else {
+        btcDomComment = "🚀 <i>(Düşük Hakimiyet: Sermaye altcoinlere kaymış durumda, altcoin rallisine uygun)</i>";
     }
 
-    const msg = `👑 <b>MAKRO DOMİNANS & PARA AKIŞI RAPORU</b>\n\n• <b>Bitcoin Dominansı (BTC.D):</b> <b>%${dom.btcDom}</b>\n• <b>Ethereum Dominansı (ETH.D):</b> <b>%${dom.ethDom}</b>\n• <b>BTCDOM Vadeli Endeksi:</b> $${dom.domIndexPrice ? dom.domIndexPrice.toFixed(1) : '5650.0'}\n  ↳ 15D Değişim: <b>${dom.domChange15m >= 0 ? '+' : ''}%${dom.domChange15m}</b> | 1S Değişim: <b>${dom.domChange1h >= 0 ? '+' : ''}%${dom.domChange1h}</b>\n• <b>24S Toplam Market Cap:</b> ${dom.mcapChange24h >= 0 ? '+' : ''}%${dom.mcapChange24h}\n• <b>Anlık Rejim:</b> ${dom.badge}\n\n${strategyAdvice}`;
+    let ethDomComment = "";
+    if (dom.ethDom <= 12) {
+        ethDomComment = "🥶 <i>(Zayıf Görünüm: ETH pazar payı düşük, majör altcoinlerde henüz tam güçlenme yok)</i>";
+    } else if (dom.ethDom <= 16) {
+        ethDomComment = "⚡ <i>(Normal Güç: Majör altcoinlere standart para girişi var)</i>";
+    } else {
+        ethDomComment = "🔥 <i>(Güçlü ETH: Altcoin piyasasına liderlik ediyor, Long iştahı yüksek)</i>";
+    }
+
+    let othersComment = othersDom >= 32
+        ? "🟢 <i>(Altcoinlerde güçlü para tutunması var, altcoin tahtaları canlı)</i>"
+        : "🟡 <i>(BTC ve ETH dışındaki tüm altcoinlerin toplam pazar payı)</i>";
+
+    const chg15Icon = dom.domChange15m > 0.05 ? "🔺" : dom.domChange15m < -0.05 ? "🔻" : "➖";
+    const chg1hIcon = dom.domChange1h > 0.08 ? "🔺" : dom.domChange1h < -0.08 ? "🔻" : "➖";
+
+    let domFlowMeaning = "";
+    if (dom.domChange1h >= 0.30 || dom.domChange15m >= 0.20) {
+        domFlowMeaning = "🩸 <b>Anlamı:</b> BTC dominansı hızla yükseliyor! BTC piyasadaki likiditeyi emiyor, altcoinlerde <b>SHORT</b> baskısı artar.";
+    } else if (dom.domChange1h <= -0.20 || dom.domChange15m <= -0.15) {
+        domFlowMeaning = "💸 <b>Anlamı:</b> Dominans düşüyor! Para BTC'den çıkıp altcoinlere akıyor, altcoinlerde <b>LONG</b> fırsatları güçlenir.";
+    } else {
+        domFlowMeaning = "🧘‍♂️ <b>Anlamı:</b> Dominans şu an yatay ve sakin. Altcoinler BTC baskısı olmadan kendi iç hacmi ve tekniğiyle hareket ediyor.";
+    }
+
+    let mcapIcon = "⚪";
+    let mcapMeaning = "";
+    if (dom.mcapChange24h <= -3.0) {
+        mcapIcon = "🔴📉";
+        mcapMeaning = "<i>(Son 24 saatte piyasadan sert para çıkışı / küçülme var — Seçici olunmalı)</i>";
+    } else if (dom.mcapChange24h < 0) {
+        mcapIcon = "🟠↘️";
+        mcapMeaning = "<i>(Piyasada hafif kâr satışı / para çıkışı hakim)</i>";
+    } else if (dom.mcapChange24h >= 2.5) {
+        mcapIcon = "🟢🚀";
+        mcapMeaning = "<i>(Kripto piyasasına güçlü taze para girişi var — Boğa iştahı yüksek)</i>";
+    } else {
+        mcapIcon = "🟢↗️";
+        mcapMeaning = "<i>(Piyasaya pozitif para girişi devam ediyor)</i>";
+    }
+
+    const btcIcon = btc.btcTrend === "DUMP" ? "🔴 Satış Baskılı" : btc.btcTrend === "PUMP" ? "🟢 Alım Yönlü" : "⚪ Sakin / Dengeli";
+
+    let strategyAdvice = "⚖️ <b>AKTİF BOT STRATEJİSİ (ÇİFT YÖNLÜ DENGE):</b>\n• Piyasada tek yönlü bir dominans ezilmesi yok.\n• Bot şu an hem <b>🟢 LONG</b> hem de <b>🔴 SHORT</b> yönlü kurumsal sinyalleri eşit ağırlıkla tarıyor.";
+    if (dom.regime === "ALT_SEASON_FLOW") {
+        strategyAdvice = "🟢🚀 <b>AKTİF BOT STRATEJİSİ (ALTCOİN RALLİ AKIŞI):</b>\n• Sermaye BTC'den altcoinlere akıyor!\n• Altcoin <b>🟢 LONG</b> işlemleri ekstra kalite puanı (+1⭐) alıyor, zayıf Short sinyalleri filtreleniyor.";
+    } else if (dom.regime === "BTC_SUCKING_LIQUIDITY") {
+        strategyAdvice = "⚠️🛡️ <b>AKTİF BOT STRATEJİSİ (LİKİDİTE EMİLİM KALKANI):</b>\n• BTC dominansı sert yükseldiği için altcoinler ezilme riskinde.\n• Sıradan altcoin <b>LONG</b> işlemleri durduruldu! Sadece A+ Dip Likidite Avı ve <b>🔴 SHORT</b> fırsatları açılıyor.";
+    } else if (dom.regime === "ALT_BLEED") {
+        strategyAdvice = "🩸🚨 <b>AKTİF BOT STRATEJİSİ (ALTCOİN KANAMA KALKANI):</b>\n• BTC düşerken Dominans yükseliyor (Altcoinler için en tehlikeli senaryo)!\n• Altcoin <b>LONG</b> sinyalleri tamamen kilitlendi, bot <b>🔴 SHORT</b> yönlü işlemlere odaklandı.";
+    }
+
+    const msg = `👑 <b>MAKRO DOMİNANS & PARA AKIŞI RAPORU</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `🟠 <b>Bitcoin Dominansı (BTC.D):</b> <b>%${dom.btcDom}</b>\n` +
+        `  ↳ <code>[${makeBar(dom.btcDom, 80)}]</code>\n` +
+        `  ↳ 💬 ${btcDomComment}\n\n` +
+        `🔵 <b>Ethereum Dominansı (ETH.D):</b> <b>%${dom.ethDom}</b>\n` +
+        `  ↳ <code>[${makeBar(dom.ethDom, 30)}]</code>\n` +
+        `  ↳ 💬 ${ethDomComment}\n\n` +
+        `🟣 <b>Diğer Altcoinler (OTHERS.D):</b> <b>%${othersDom}</b>\n` +
+        `  ↳ <code>[${makeBar(othersDom, 50)}]</code>\n` +
+        `  ↳ 💬 ${othersComment}\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📊 <b>BTCDOM Vadeli Endeksi:</b> <b>$${dom.domIndexPrice ? dom.domIndexPrice.toFixed(1) : '5650.0'}</b>\n` +
+        `  • ⏱ <b>15 Dakikalık:</b> ${chg15Icon} <b>${dom.domChange15m >= 0 ? '+' : ''}%${dom.domChange15m}</b> <i>(Kısa vadeli anlık para yönü)</i>\n` +
+        `  • 🕐 <b>1 Saatlik:</b> ${chg1hIcon} <b>${dom.domChange1h >= 0 ? '+' : ''}%${dom.domChange1h}</b> <i>(Saatlik ana likidite akışı)</i>\n` +
+        `  ↳ ${domFlowMeaning}\n\n` +
+        `🌍 <b>24S Toplam Market Cap:</b> ${mcapIcon} <b>${dom.mcapChange24h >= 0 ? '+' : ''}%${dom.mcapChange24h}</b>\n` +
+        `  ↳ 💬 ${mcapMeaning}\n\n` +
+        `⚡ <b>BTC 15D Durumu:</b> %${btc.change15m} (${btcIcon})\n` +
+        `🧭 <b>Anlık Piyasa Rejimi:</b> ${dom.badge}\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `${strategyAdvice}\n\n` +
+        `⏱ <i>Rapor Saati: ${getTurkishTimeString()}</i>`;
+
     await sendTelegramMessage(msg, replyToId);
 }
 
