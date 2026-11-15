@@ -18,7 +18,7 @@ const zlib = require('zlib');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Quant V6 Pro - High WinRate, Smart Cache, Dominance & L/S Size Active\n');
+    res.end('ScalpPro Quant V6 Pro - High WinRate, Smart Cache, Dominance & Auto-Backup Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -70,7 +70,7 @@ const COIN_ASSIGNMENTS = {
 };
 
 const dynamicCoinMemory = new Map();
-const klineCache = new Map(); // Akıllı Mum Önbelleği (Veri bulunamadı hatasını önler)
+const klineCache = new Map();
 
 function getCoinProfile(symbol) {
     if (!dynamicCoinMemory.has(symbol)) {
@@ -101,7 +101,7 @@ function handleTradeResult(symbol, resultType) {
 }
 
 // ==========================================
-// 3. KALICI BİLEŞİK KASA & TELEGRAM BULUT YEDEKLEME
+// 3. KALICI BİLEŞİK KASA & OTOMATİK BULUT YEDEKLEME
 // ==========================================
 const WALLET_FILE = path.join(__dirname, 'kasa_yedek.json');
 let lastUpdateId = 0;
@@ -126,7 +126,7 @@ function encodeCloudState() {
             wStart: walletStartTime,
             bal: customStartingBalance,
             active: Array.from(activeTrades.entries()),
-            hist: tradeHistory.slice(-200),
+            hist: tradeHistory.slice(-300),
             mem: memEntries,
             cMsgId: cloudMessageId,
             maxSide: maxSameSideTrades,
@@ -144,7 +144,7 @@ function decodeAndApplyCloudState(base64Str) {
         const parsed = JSON.parse(rawJson);
         if (parsed.wStart) walletStartTime = parsed.wStart;
         if (parsed.bal !== undefined) customStartingBalance = parsed.bal;
-        if (Array.isArray(parsed.hist)) tradeHistory = parsed.hist;
+        if (Array.isArray(parsed.hist) && parsed.hist.length > 0) tradeHistory = parsed.hist;
         if (parsed.cMsgId) cloudMessageId = parsed.cMsgId;
         if (parsed.maxSide && parsed.maxSide >= 1) maxSameSideTrades = parsed.maxSide;
         if (parsed.maxTotal && parsed.maxTotal >= 1) maxTotalActiveTrades = parsed.maxTotal;
@@ -211,7 +211,7 @@ function scheduleCloudBackup() {
     if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
     cloudSyncTimer = setTimeout(async () => {
         await syncStateToTelegramCloud();
-    }, 2500);
+    }, 1500);
 }
 
 function saveWalletState() {
@@ -317,7 +317,7 @@ function getActiveSessionName() {
 }
 
 // ==========================================
-// 4. TELEGRAM API & BULUT SENKRONİZASYON MOTORU
+// 4. TELEGRAM API & OTOMATİK BULUT SENKRONİZASYON
 // ==========================================
 function fetchJSON(url, customHeaders = {}, timeoutMs = 8000) {
     return new Promise((resolve, reject) => {
@@ -1437,7 +1437,7 @@ async function pollTelegramUpdates() {
 }
 
 // ==========================================
-// 7. CANLI FİYAT (LIVE PRICE) İŞLEM TAKİBİ
+// 7. CANLI FİYAT (LIVE PRICE) İŞLEM TAKİBİ (DÜZELTİLMİŞ RİSK-FREE VE TABLO SENKRONİZASYONU)
 // ==========================================
 async function checkActiveTrades(symbol, currentPrice, btc) {
     const trade = activeTrades.get(symbol);
@@ -1456,7 +1456,6 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
         const curProfitPct = ((currentPrice - trade.entry) / trade.entry) * 100;
         const tp1TargetPct = ((trade.tp1 - trade.entry) / trade.entry) * 100;
 
-        // %70 TP1 Mesafesinde Erken Break-Even veya BTC Şok Koruması
         if (!trade.tp1Hit && !trade.shockProtected && ((tp1TargetPct > 0 && curProfitPct >= tp1TargetPct * 0.70) || (curProfitPct >= 0.50 && (btc.btcTrend === 'DUMP' || btc.shockDump)))) {
             trade.shockProtected = true;
             trade.sl = trade.entry;
@@ -1507,18 +1506,19 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
 
         if (currentPrice <= trade.sl) {
             if (trade.tp1Hit && trade.tp1HitTime && (Date.now() - trade.tp1HitTime < 20000)) return;
-            let dollarImpact = 0;
             const prevBal = calculateCurrentBalance();
             activeTrades.delete(symbol);
             if (trade.trailingHit) {
                 saveWalletState();
                 await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOP (TP1 SEVİYESİNDE) KAPANDI | #${cleanSymbol}/USDT</b>\nTP1 kârı korunarak işlem tamamlandı (Kasa: $${prevBal.toFixed(2)}).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else if (trade.tp1Hit || trade.shockProtected) {
+                recordTradeEvent('RISK_FREE_CLOSE', symbol, 0); // Sıfır zararlı kapanış tablolara işlendi
+                await sleep(Math.floor(Math.random() * 2000)); // Toplu kapanmayı önleyen akıllı gecikme
                 saveWalletState();
                 await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b> (0 Ek Zarar | Kasa: $${prevBal.toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
                 const slLossPct = ((trade.sl - trade.entry) / trade.entry) * 100;
-                dollarImpact = trade.margin * (slLossPct / 100) * trade.leverage;
+                const dollarImpact = trade.margin * (slLossPct / 100) * trade.leverage;
                 recordTradeEvent('STOP', symbol, dollarImpact);
                 handleTradeResult(symbol, 'STOP');
                 const newBal = calculateCurrentBalance();
@@ -1532,7 +1532,6 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
         const curProfitPct = ((trade.entry - currentPrice) / trade.entry) * 100;
         const tp1TargetPct = ((trade.entry - trade.tp1) / trade.entry) * 100;
 
-        // %70 TP1 Mesafesinde Erken Break-Even veya BTC Şok Koruması
         if (!trade.tp1Hit && !trade.shockProtected && ((tp1TargetPct > 0 && curProfitPct >= tp1TargetPct * 0.70) || (curProfitPct >= 0.50 && (btc.btcTrend === 'PUMP' || btc.shockPump)))) {
             trade.shockProtected = true;
             trade.sl = trade.entry;
@@ -1583,18 +1582,19 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
 
         if (currentPrice >= trade.sl) {
             if (trade.tp1Hit && trade.tp1HitTime && (Date.now() - trade.tp1HitTime < 20000)) return;
-            let dollarImpact = 0;
             const prevBal = calculateCurrentBalance();
             activeTrades.delete(symbol);
             if (trade.trailingHit) {
                 saveWalletState();
                 await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOP (TP1 SEVİYESİNDE) KAPANDI | #${cleanSymbol}/USDT</b>\nTP1 kârı korunarak işlem tamamlandı (Kasa: $${prevBal.toFixed(2)}).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else if (trade.tp1Hit || trade.shockProtected) {
+                recordTradeEvent('RISK_FREE_CLOSE', symbol, 0); // Sıfır zararlı kapanış tablolara işlendi
+                await sleep(Math.floor(Math.random() * 2000)); // Toplu kapanmayı önleyen akıllı gecikme
                 saveWalletState();
                 await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b> (0 Ek Zarar | Kasa: $${prevBal.toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
                 const slLossPct = ((trade.entry - trade.sl) / trade.entry) * 100;
-                dollarImpact = trade.margin * (slLossPct / 100) * trade.leverage;
+                const dollarImpact = trade.margin * (slLossPct / 100) * trade.leverage;
                 recordTradeEvent('STOP', symbol, dollarImpact);
                 handleTradeResult(symbol, 'STOP');
                 const newBal = calculateCurrentBalance();
@@ -1629,7 +1629,7 @@ function canOpenNewTrade(side) {
 }
 
 // ==========================================
-// 8. QUANT V6 PRO TARAMA MOTORU (YÜKSEK WIN-RATE)
+// 8. QUANT V6 PRO TARAMA MOTORU
 // ==========================================
 async function scanMarket() {
     try {
@@ -1648,7 +1648,7 @@ async function scanMarket() {
             if (!hasOpenTrade && prof.quarantineUntil > Date.now()) continue;
 
             const klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
-            await sleep(35); // API Rate Limit koruması için optimize nefes payı
+            await sleep(35);
             if (!klines15m || klines15m.length < 40) continue;
             scannedCount++;
 
@@ -1665,7 +1665,6 @@ async function scanMarket() {
             await checkActiveTrades(symbol, currentPrice, btc);
             if (prof.quarantineUntil > Date.now()) continue;
 
-            // Aynı tarama döngüsünde en fazla 2 yeni işlem aç (Ani dalgada toplu stop olmayı önler)
             if (signalsInThisCycle >= 2) continue;
 
             const stoch15m = calculateStochRSI(closes15);
@@ -1676,7 +1675,6 @@ async function scanMarket() {
             const lowerWick = Math.min(currentOpen, currentPrice) - currentLow;
             const upperWick = currentHigh - Math.max(currentOpen, currentPrice);
             
-            // Net dönüş mumu onayı (Ters yöne sert mum devam ederken erken girmeyi önler)
             const hasBullReversalCandle = (currentPrice > currentOpen && upperWick <= bodySize * 1.8) || (prevClose > prevOpen && currentPrice >= prevClose && lowerWick >= upperWick);
             const hasBearReversalCandle = (currentPrice < currentOpen && lowerWick <= bodySize * 1.8) || (prevClose < prevOpen && currentPrice <= prevClose && upperWick >= lowerWick);
 
@@ -1724,14 +1722,12 @@ async function scanMarket() {
 
             if ((isPotentialLong && rsDiff < -0.85 && !sweepData.bullSweep) || (isPotentialShort && rsDiff > 0.85 && !sweepData.bearSweep)) continue;
 
-            // Sıkı 1H EMA50 + RSI Trend Filtresi (Trend tersine erken girişleri keser)
             const canLong1H = ((currentPrice1h >= ema50_1h * 0.996 && rsi1h >= 46 && rsi1h <= 72) || (sweepData.bullSweep && rsi1h >= 42)) && !mom1h.isWaterfall;
             const canShort1H = ((currentPrice1h <= ema50_1h * 1.004 && rsi1h <= 54 && rsi1h >= 28) || (sweepData.bearSweep && rsi1h <= 58)) && !mom1h.isRocket;
 
             let candleData = { reportText: "⚠️ 4H Verisi Alınamadı", netGain: 0, lastCandleChange: 0, isBearDominance: false, isBullDominance: false, isRanging: true };
             if (klines4h && klines4h.length >= 20) candleData = analyze4HCandles(klines4h);
 
-            // 4H son mum veya makro yapı ters yönde güçlü ise işlemi engelle
             if (isPotentialLong && (!canLong1H || candleData.isBearDominance || candleData.lastCandleChange <= -1.10)) continue;
             if (isPotentialShort && (!canShort1H || candleData.isBullDominance || candleData.lastCandleChange >= 1.10)) continue;
 
@@ -1747,7 +1743,6 @@ async function scanMarket() {
             const cleanSymbol = symbol.replace('USDT', '');
             let signal = null;
 
-            // Yüksek Win-Rate Hedef Çarpanları (Daha rahat nefes alan Stop, daha hızlı vurulan TP1)
             const isFastRiskFreeMode = adxData.adx < 24 || candleData.isRanging;
             const tp1Mult = isFastRiskFreeMode ? 0.85 : (adxData.isStrongTrend ? 1.05 : 0.95);
             const tp2Mult = isFastRiskFreeMode ? 1.90 : (adxData.isStrongTrend ? 2.40 : 2.10);
@@ -1787,7 +1782,6 @@ async function scanMarket() {
             if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 60 * 60 * 1000)) {
                 const quality = evaluateSignalQuality(signal.side, stoch15m, volData, lsSizeData, candleData, smc, adxData, sweepData, oiData, rsStrong, domData);
 
-                // Düşük kaliteli (kurumsal onayı zayıf) sinyalleri filtrele
                 if (quality.score < 3 && !sweepData.bullSweep && !sweepData.bearSweep && !smc.hasOB) continue;
 
                 const liveWalletBalance = calculateCurrentBalance();
