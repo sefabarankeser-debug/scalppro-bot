@@ -18,7 +18,7 @@ const zlib = require('zlib');
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('ScalpPro Quant V6 Pro - High WinRate, Smart Cache, Dominance & Auto-Backup Active\n');
+    res.end('ScalpPro Quant V6 Pro - 10 Institutional Filters, Regression Channel, Pivots & Auto-Backup Active\n');
 }).listen(PORT, '0.0.0.0', () => {
     console.log(`Sunucu ${PORT} portunda dinlemede.`);
 });
@@ -285,16 +285,19 @@ function getWindowCountsText(hours) {
     const filtered = tradeHistory.filter(t => t.time >= cutoff);
     const tp1Count = filtered.filter(t => t.type === 'TP1' || t.type === 'MANUAL_WIN').length;
     const tp2Count = filtered.filter(t => t.type === 'TP2').length;
+    const rfCount = filtered.filter(t => t.type === 'RISK_FREE_CLOSE').length;
     const stopCount = filtered.filter(t => t.type === 'STOP' || t.type === 'MANUAL_LOSS').length;
     const total = tp1Count + tp2Count + stopCount;
-    if (total === 0) return `• <b>Son ${hours} Saat:</b> Henüz sonuçlanan işlem yok`;
-    const winRate = (((tp1Count + tp2Count) / total) * 100).toFixed(1);
-    return `• <b>Son ${hours} Saat:</b> ${tp1Count} TP1 | ${tp2Count} TP2 | ${stopCount} Stop (%${winRate} Win Rate)`;
+    if (total === 0 && rfCount === 0) return `• <b>Son ${hours} Saat:</b> Henüz sonuçlanan işlem yok`;
+    const winRate = total > 0 ? (((tp1Count + tp2Count) / total) * 100).toFixed(1) : "100.0";
+    const rfBadge = rfCount > 0 ? ` | 🛡️ ${rfCount} Başabaş` : "";
+    return `• <b>Son ${hours} Saat:</b> ${tp1Count} TP1 | ${tp2Count} TP2 | ${stopCount} Stop${rfBadge} (%${winRate} Win Rate)`;
 }
 
 function getStatsText() {
     const tp1Count = tradeHistory.filter(t => t.type === 'TP1' || t.type === 'MANUAL_WIN').length;
     const tp2Count = tradeHistory.filter(t => t.type === 'TP2').length;
+    const rfCount = tradeHistory.filter(t => t.type === 'RISK_FREE_CLOSE').length;
     const stopCount = tradeHistory.filter(t => t.type === 'STOP' || t.type === 'MANUAL_LOSS').length;
     const totalTrades = tp1Count + tp2Count + stopCount;
 
@@ -304,11 +307,12 @@ function getStatsText() {
     const sign = netDiff >= 0 ? "+" : "";
     const colorIcon = netDiff >= 0 ? "🟢" : "🔴";
     const totalWinRate = totalTrades > 0 ? (((tp1Count + tp2Count) / totalTrades) * 100).toFixed(1) : "0.0";
+    const rfTotalBadge = rfCount > 0 ? ` | 🛡️ ${rfCount} Başabaş` : "";
 
     const text1 = getWindowCountsText(1);
     const text12 = getWindowCountsText(12);
 
-    return `📊 <b>Canlı Başarı & Bileşik Kasa Simülasyonu:</b>\n${text1}\n${text12}\n• <b>Toplam Genel:</b> ${tp1Count} TP1 | ${tp2Count} TP2 | ${stopCount} Stop (%${totalWinRate} Win Rate)\n  ↳ ${colorIcon} <b>Güncel Bileşik Kasa:</b> <b>$${currentBal.toFixed(2)}</b> <i>(Başlangıç: $${customStartingBalance} | Net: <b>${sign}$${netDiff.toFixed(2)} / ${sign}%${netGainPct}</b>)</i>`;
+    return `📊 <b>Canlı Başarı & Bileşik Kasa Simülasyonu:</b>\n${text1}\n${text12}\n• <b>Toplam Genel:</b> ${tp1Count} TP1 | ${tp2Count} TP2 | ${stopCount} Stop${rfTotalBadge} (%${totalWinRate} Win Rate)\n  ↳ ${colorIcon} <b>Güncel Bileşik Kasa:</b> <b>$${currentBal.toFixed(2)}</b> <i>(Başlangıç: $${customStartingBalance} | Net: <b>${sign}$${netDiff.toFixed(2)} / ${sign}%${netGainPct}</b>)</i>`;
 }
 
 function getActiveSessionName() {
@@ -393,27 +397,35 @@ async function syncStateToTelegramCloud() {
 }
 
 async function restoreFromTelegramCloudOnStartup() {
-    try {
-        const chatRes = await fetchJSON(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getChat?chat_id=${CHAT_ID}`);
-        if (chatRes && chatRes.ok && chatRes.result && chatRes.result.pinned_message) {
-            const pinned = chatRes.result.pinned_message;
-            const txt = pinned.text || "";
-            const match = txt.match(/\[CLOUD_STATE:([A-Za-z0-9+/=]+)\]/);
-            if (match && match[1]) {
-                const ok = decodeAndApplyCloudState(match[1]);
-                cloudMessageId = pinned.message_id;
-                if (ok) {
-                    console.log(`☁️ Bulut Hafıza Başarıyla Geri Yüklendi! Açık İşlem: ${activeTrades.size}`);
-                    return true;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const chatRes = await fetchJSON(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getChat?chat_id=${CHAT_ID}`, {}, 8000);
+            if (chatRes && chatRes.ok && chatRes.result) {
+                if (chatRes.result.pinned_message) {
+                    const pinned = chatRes.result.pinned_message;
+                    const txt = pinned.text || "";
+                    const match = txt.match(/\[CLOUD_STATE:([A-Za-z0-9+/=]+)\]/);
+                    if (match && match[1]) {
+                        const ok = decodeAndApplyCloudState(match[1]);
+                        cloudMessageId = pinned.message_id;
+                        if (ok) {
+                            console.log(`☁️ Bulut Hafıza Başarıyla Geri Yüklendi! Kasa: $${calculateCurrentBalance()} | Açık İşlem: ${activeTrades.size}`);
+                            return { restored: true, hadPinnedMessage: true };
+                        }
+                    }
+                    return { restored: false, hadPinnedMessage: true };
+                } else {
+                    return { restored: false, hadPinnedMessage: false };
                 }
             }
-        }
-    } catch (e) {}
-    return false;
+        } catch (e) {}
+        if (attempt < 3) await sleep(2000);
+    }
+    return { restored: false, hadPinnedMessage: true };
 }
 
 // ==========================================
-// 5. KURUMSAL İNDİKATÖRLER, L/S SIZE & MAKRO DOMİNANS MOTORU
+// 5. KURUMSAL İNDİKATÖRLER, REGRESYON KANALI, PİVOTLAR & MAKRO DOMİNANS
 // ==========================================
 let cachedGlobalDom = { btcDom: 56.5, ethDom: 13.5, mcapChange24h: 0, updatedAt: 0 };
 
@@ -514,6 +526,101 @@ async function checkDominanceCondition(btcTrend = "NEUTRAL") {
         boostAltShorts,
         badge
     };
+}
+
+// 9. KURUMSAL FİLTRE: 100 MUMLUK DOĞRUSAL REGRESYON KANALI (100, 2)
+function calculateLinearRegressionChannel(closes, period = 100, devMult = 2.0) {
+    const n = Math.min(Array.isArray(closes) ? closes.length : 0, period);
+    if (n < 30) {
+        return { mid: 0, upper: 0, lower: 0, slopePct: 0, posPct: 50, isFalling: false, isRising: false, blockLong: false, blockShort: false, boostLong: false, boostShort: false, badge: "Standart Kanal ⚙️" };
+    }
+    const slice = closes.slice(-n);
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    for (let i = 0; i < n; i++) {
+        sumX += i;
+        sumY += slice[i];
+        sumXY += i * slice[i];
+        sumXX += i * i;
+    }
+    const denom = (n * sumXX - sumX * sumX);
+    const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+    const intercept = (sumY - slope * sumX) / n;
+
+    let sumSqErr = 0;
+    for (let i = 0; i < n; i++) {
+        const regVal = intercept + slope * i;
+        const diff = slice[i] - regVal;
+        sumSqErr += diff * diff;
+    }
+    const stdDev = Math.sqrt(sumSqErr / n);
+    const currentMid = intercept + slope * (n - 1);
+    const upper = currentMid + devMult * stdDev;
+    const lower = currentMid - devMult * stdDev;
+    const curPrice = slice[n - 1];
+
+    const channelWidth = upper - lower;
+    const posRatio = channelWidth > 0 ? (curPrice - lower) / channelWidth : 0.5;
+    const posPct = Math.max(0, Math.min(100, Math.round(posRatio * 100)));
+    const slopePct = currentMid > 0 ? ((slope * n) / currentMid) * 100 : 0;
+
+    const isFalling = slopePct <= -0.85;
+    const isRising = slopePct >= 0.85;
+
+    // Düşen kanalın tavanında Long, yükselen kanalın tabanında Short açılmasını engeller
+    const blockLong = (isFalling && posRatio >= 0.78) || posRatio >= 0.96;
+    const blockShort = (isRising && posRatio <= 0.22) || posRatio <= 0.04;
+
+    // Kanal alt bölgesinden Long, üst bölgesinden Short dönüşlerini ödüllendirir
+    const boostLong = posRatio <= 0.30 && !isFalling;
+    const boostShort = posRatio >= 0.70 && !isRising;
+
+    const dirIcon = isRising ? "🟢↗️ Yükselen" : isFalling ? "🔴↘️ Düşen" : "⚪➡️ Yatay";
+    const badge = `${dirIcon} Kanal (Konum: %${posPct} | Eğim: ${slopePct >= 0 ? '+' : ''}%${slopePct.toFixed(1)})`;
+
+    return { mid: currentMid, upper, lower, slopePct, posPct, isFalling, isRising, blockLong, blockShort, boostLong, boostShort, badge };
+}
+
+// 10. KURUMSAL FİLTRE: GELENEKSEL PİVOT NOKTALARI (P, R1, R2, S1, S2)
+function calculateTraditionalPivots(klines4h, currentPrice) {
+    if (!klines4h || klines4h.length < 8 || !currentPrice) {
+        return { P: 0, R1: 0, R2: 0, S1: 0, S2: 0, blockLong: false, blockShort: false, boostLong: false, boostShort: false, badge: "Pivot Nötr ⚙️" };
+    }
+    const prev6 = klines4h.slice(-7, -1);
+    let high = -Infinity, low = Infinity;
+    for (const c of prev6) {
+        const h = parseFloat(c[2]);
+        const l = parseFloat(c[3]);
+        if (h > high) high = h;
+        if (l < low) low = l;
+    }
+    const close = parseFloat(prev6[prev6.length - 1][4]);
+
+    const P = (high + low + close) / 3;
+    const R1 = (2 * P) - low;
+    const S1 = (2 * P) - high;
+    const R2 = P + (high - low);
+    const S2 = P - (high - low);
+
+    const distToR1Pct = ((R1 - currentPrice) / currentPrice) * 100;
+    const distToR2Pct = ((R2 - currentPrice) / currentPrice) * 100;
+    const distToS1Pct = ((currentPrice - S1) / currentPrice) * 100;
+    const distToS2Pct = ((currentPrice - S2) / currentPrice) * 100;
+
+    // Direncin tam altında Long, desteğin tam üstünde Short açmayı engeller
+    const blockLong = (distToR1Pct > 0 && distToR1Pct <= 0.32) || (distToR2Pct > 0 && distToR2Pct <= 0.32);
+    const blockShort = (distToS1Pct > 0 && distToS1Pct <= 0.32) || (distToS2Pct > 0 && distToS2Pct <= 0.32);
+
+    // S1/S2 desteğinden sekme veya R1/R2 direncinden dönüş onayı
+    const boostLong = (Math.abs(distToS1Pct) <= 0.55) || (Math.abs(distToS2Pct) <= 0.65) || (currentPrice >= P && ((currentPrice - P) / P) * 100 <= 0.45);
+    const boostShort = (Math.abs(distToR1Pct) <= 0.55) || (Math.abs(distToR2Pct) <= 0.65) || (currentPrice <= P && ((P - currentPrice) / P) * 100 <= 0.45);
+
+    let zoneText = `P: $${formatPrice(P, currentPrice)}`;
+    if (currentPrice >= R1) zoneText = `R1 Üzeri Güçlü (R2: $${formatPrice(R2, currentPrice)})`;
+    else if (currentPrice >= P) zoneText = `Pivot Üzeri Pozitif (R1: $${formatPrice(R1, currentPrice)})`;
+    else if (currentPrice >= S1) zoneText = `Pivot Altı Negatif (S1: $${formatPrice(S1, currentPrice)})`;
+    else zoneText = `S1 Altı Dip Bölge (S2: $${formatPrice(S2, currentPrice)})`;
+
+    return { P, R1, R2, S1, S2, blockLong, blockShort, boostLong, boostShort, badge: `🎯 ${zoneText}` };
 }
 
 async function fetchLongShortSizeData(symbol, currentPrice) {
@@ -734,7 +841,7 @@ function detectSmartMoneyStructure(klines) {
     return { hasOB, hasFVG, smcBadge: badge };
 }
 
-function evaluateSignalQuality(side, stoch15m, volData, lsData, candleData, smc, adxData, sweepData, oiData, rsStrong, domData) {
+function evaluateSignalQuality(side, stoch15m, volData, lsData, candleData, smc, adxData, sweepData, oiData, rsStrong, domData, regData, pivotData) {
     let score = 0;
     if (volData.ratio >= 1.15) score++;
     if ((side === 'LONG' && stoch15m.k <= 18) || (side === 'SHORT' && stoch15m.k >= 82)) score++;
@@ -745,6 +852,8 @@ function evaluateSignalQuality(side, stoch15m, volData, lsData, candleData, smc,
     if (oiData.isInflow) score++;
     if (rsStrong) score++;
     if ((side === 'LONG' && domData && domData.boostAltLongs) || (side === 'SHORT' && domData && domData.boostAltShorts)) score++;
+    if ((side === 'LONG' && regData && regData.boostLong) || (side === 'SHORT' && regData && regData.boostShort)) score++;
+    if ((side === 'LONG' && pivotData && pivotData.boostLong) || (side === 'SHORT' && pivotData && pivotData.boostShort)) score++;
 
     if (score >= 5) {
         return { stars: "🔥⭐⭐⭐⭐⭐", title: "A+ KURUMSAL QUANT & BALİNA SİNYALİ", score, qualityTier: 5 };
@@ -1248,10 +1357,10 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     const baseSym = clean + 'USDT';
 
     let symbol = baseSym;
-    let klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
+    let klines15m = await fetchUniversalKlines(symbol, "15", 105, true);
     if ((!klines15m || klines15m.length < 25) && !symbol.startsWith('1000')) {
         symbol = '1000' + baseSym;
-        klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
+        klines15m = await fetchUniversalKlines(symbol, "15", 105, true);
     }
     if (!klines15m || klines15m.length < 25) {
         return sendTelegramMessage(`⚠️ <b>#${baseSym}</b> için borsalardan şu an yanıt alınamadı, lütfen 5 saniye sonra tekrar deneyin.`, replyToId);
@@ -1276,6 +1385,8 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
     const smc = detectSmartMoneyStructure(klines15m);
     const adxData = calculateADX(highs15, lows15, closes15);
     const sweepData = detectLiquiditySweep(klines15m);
+    const regData = calculateLinearRegressionChannel(closes15, 100, 2.0);
+    const pivotData = calculateTraditionalPivots(klines4h, currentPrice);
     
     let rsi1h = 50, ema50_1h = currentPrice;
     if (klines1h && klines1h.length >= 20) {
@@ -1299,7 +1410,7 @@ async function analyzeSpecificCoin(rawSymbol, replyToId = null) {
         openTradeNote = `\n📂 <b>Açık İşlem Durumu:</b> ${t.side} | Giriş: $${formatPrice(t.entry, t.entry)} | PNL: <b>${sign}%${pnlPct.toFixed(2)}</b> (Marjin: $${Number(t.margin).toFixed(2)})\n`;
     }
 
-    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>${openTradeNote}\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Trend:</b> ${trendText} (RSI: ${rsi1h})\n📐 <b>Trend Gücü (ADX):</b> ${adxData.badge}\n⚡ <b>15M Stoch:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d} (${crossText})\n📊 <b>Hacim:</b> ${volData.badge}\n🐋 <b>Açık Pozisyon (OI):</b> ${oiData.badge}\n🏛️ <b>SMC:</b> ${smc.smcBadge}\n🧲 <b>Likidite:</b> ${sweepData.badge}\n👑 <b>Dominans Akışı:</b> ${domData.badge}\n💸 <b>Funding:</b> ${fundingData.text}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+    const reportMsg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n🔍 <b>ÖZEL COİN ANALİZİ | #${symbol.replace('USDT', '')}</b>${openTradeNote}\n💵 <b>Anlık Fiyat:</b> $${formatPrice(currentPrice, currentPrice)}\n🧭 <b>1H Trend:</b> ${trendText} (RSI: ${rsi1h})\n📐 <b>Trend Gücü (ADX):</b> ${adxData.badge}\n📏 <b>Regresyon Kanalı (100,2):</b> ${regData.badge}\n🎯 <b>Kurumsal Pivot:</b> ${pivotData.badge}\n⚡ <b>15M Stoch:</b> %K: ${stoch15m.k} | %D: ${stoch15m.d} (${crossText})\n📊 <b>Hacim:</b> ${volData.badge}\n🐋 <b>Açık Pozisyon (OI):</b> ${oiData.badge}\n🏛️ <b>SMC:</b> ${smc.smcBadge}\n🧲 <b>Likidite:</b> ${sweepData.badge}\n👑 <b>Dominans Akışı:</b> ${domData.badge}\n💸 <b>Funding:</b> ${fundingData.text}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
     await sendTelegramMessage(reportMsg, replyToId);
 }
 
@@ -1437,7 +1548,7 @@ async function pollTelegramUpdates() {
 }
 
 // ==========================================
-// 7. CANLI FİYAT (LIVE PRICE) İŞLEM TAKİBİ (DÜZELTİLMİŞ RİSK-FREE VE TABLO SENKRONİZASYONU)
+// 7. CANLI FİYAT (LIVE PRICE) İŞLEM TAKİBİ
 // ==========================================
 async function checkActiveTrades(symbol, currentPrice, btc) {
     const trade = activeTrades.get(symbol);
@@ -1512,8 +1623,8 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
                 saveWalletState();
                 await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOP (TP1 SEVİYESİNDE) KAPANDI | #${cleanSymbol}/USDT</b>\nTP1 kârı korunarak işlem tamamlandı (Kasa: $${prevBal.toFixed(2)}).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else if (trade.tp1Hit || trade.shockProtected) {
-                recordTradeEvent('RISK_FREE_CLOSE', symbol, 0); // Sıfır zararlı kapanış tablolara işlendi
-                await sleep(Math.floor(Math.random() * 2000)); // Toplu kapanmayı önleyen akıllı gecikme
+                recordTradeEvent('RISK_FREE_CLOSE', symbol, 0);
+                await sleep(Math.floor(Math.random() * 2000));
                 saveWalletState();
                 await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b> (0 Ek Zarar | Kasa: $${prevBal.toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
@@ -1588,8 +1699,8 @@ async function checkActiveTrades(symbol, currentPrice, btc) {
                 saveWalletState();
                 await sendTelegramMessage(`🔒✅ <b>İZ SÜREN STOP (TP1 SEVİYESİNDE) KAPANDI | #${cleanSymbol}/USDT</b>\nTP1 kârı korunarak işlem tamamlandı (Kasa: $${prevBal.toFixed(2)}).\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else if (trade.tp1Hit || trade.shockProtected) {
-                recordTradeEvent('RISK_FREE_CLOSE', symbol, 0); // Sıfır zararlı kapanış tablolara işlendi
-                await sleep(Math.floor(Math.random() * 2000)); // Toplu kapanmayı önleyen akıllı gecikme
+                recordTradeEvent('RISK_FREE_CLOSE', symbol, 0);
+                await sleep(Math.floor(Math.random() * 2000));
                 saveWalletState();
                 await sendTelegramMessage(`🛡️ <b>GİRİŞTEN KORUNARAK KAPANDI | #${cleanSymbol}/USDT</b> (0 Ek Zarar | Kasa: $${prevBal.toFixed(2)})\n\n${getStatsText()}\n⏱ <b>${nowTime}</b>`);
             } else {
@@ -1629,7 +1740,7 @@ function canOpenNewTrade(side) {
 }
 
 // ==========================================
-// 8. QUANT V6 PRO TARAMA MOTORU
+// 8. QUANT V6 PRO TARAMA MOTORU (10 KURUMSAL FİLTRE)
 // ==========================================
 async function scanMarket() {
     try {
@@ -1647,7 +1758,7 @@ async function scanMarket() {
             const hasOpenTrade = activeTrades.has(symbol);
             if (!hasOpenTrade && prof.quarantineUntil > Date.now()) continue;
 
-            const klines15m = await fetchUniversalKlines(symbol, "15", 55, true);
+            const klines15m = await fetchUniversalKlines(symbol, "15", 105, true);
             await sleep(35);
             if (!klines15m || klines15m.length < 40) continue;
             scannedCount++;
@@ -1689,6 +1800,11 @@ async function scanMarket() {
             const adxData = calculateADX(highs15, lows15, closes15);
             const smc = detectSmartMoneyStructure(klines15m);
             const sweepData = detectLiquiditySweep(klines15m);
+            const regData = calculateLinearRegressionChannel(closes15, 100, 2.0);
+
+            // 9. Filtre Kontrolü: Regresyon Kanalı ters uç engeli (Likidite avı yoksa ters kanal ucunda işlem açmaz)
+            if (isPotentialLong && regData.blockLong && !sweepData.bullSweep) continue;
+            if (isPotentialShort && regData.blockShort && !sweepData.bearSweep) continue;
 
             const isAltcoin = symbol !== "BTCUSDT" && symbol !== "ETHUSDT";
             if (isAltcoin && isPotentialLong && domData.blockAltLongs) {
@@ -1707,6 +1823,12 @@ async function scanMarket() {
             const klines1h = await fetchUniversalKlines(symbol, "60", 55, true);
             const klines4h = await fetchUniversalKlines(symbol, "240", 55, true);
             if (!klines1h || klines1h.length < 25) continue;
+
+            const pivotData = calculateTraditionalPivots(klines4h, currentPrice);
+
+            // 10. Filtre Kontrolü: Kurumsal Pivot Direnç/Destek Engeli
+            if (isPotentialLong && pivotData.blockLong && !volData.isSpike) continue;
+            if (isPotentialShort && pivotData.blockShort && !volData.isSpike) continue;
 
             const closes1h = klines1h.map(k => parseFloat(k[4]));
             const rsi1h = Math.round(calculateRSI(closes1h, 14));
@@ -1780,7 +1902,7 @@ async function scanMarket() {
 
             const lastAlertTime = alertedCoins.get(symbol) || 0;
             if (signal && !activeTrades.has(symbol) && (Date.now() - lastAlertTime >= 60 * 60 * 1000)) {
-                const quality = evaluateSignalQuality(signal.side, stoch15m, volData, lsSizeData, candleData, smc, adxData, sweepData, oiData, rsStrong, domData);
+                const quality = evaluateSignalQuality(signal.side, stoch15m, volData, lsSizeData, candleData, smc, adxData, sweepData, oiData, rsStrong, domData, regData, pivotData);
 
                 if (quality.score < 3 && !sweepData.bullSweep && !sweepData.bearSweep && !smc.hasOB) continue;
 
@@ -1825,7 +1947,7 @@ async function scanMarket() {
 
                 const modeBadge = isFastRiskFreeMode ? `⚡ Hızlı Risk-Free (${tp1Mult}R)` : `🚀 Trend Takip (${tp1Mult}R)`;
 
-                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n${quality.stars} <b>${quality.title}</b>\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Doğal ATR Stop (-%${signal.slPct}):</b> $${signal.sl}\n\n💼 <b>Güncel Kasa:</b> $${liveWalletBalance.toFixed(2)}\n💵 <b>Bileşik Marjin (Kasanın %${marginPct}'i):</b> <b>$${margin.toFixed(2)}</b>\n⚖️ <b>Dinamik Kaldıraç:</b> <b>${leverage}x</b> (Pozisyon: $${(margin * leverage).toFixed(1)})\n\n🎯 <b>Kademeli Kâr Hedefleri (${modeBadge}):</b>\n• <b>TP1 (+%${signal.tp1Pct} | +$${expectedTp1Dollar}):</b> $${signal.tp1}\n• <b>TP2:</b> $${signal.tp2}\n\n⚙️ <b>Kurumsal Onaylar (8 Filtre):</b>\n• Profil: ${prof.category}\n• Dominans Akışı: ${domData.badge}\n• Trend Gücü: ${adxData.badge}\n• Likidite: ${sweepData.badge}\n• Açık Pozisyon (OI): ${oiData.badge}\n• Rölatif Güç: ${rsBadge}\n• 15M Hacim: ${volData.badge}\n• Smart Money (SMC): ${smc.smcBadge}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
+                const msg = `👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n${quality.stars} <b>${quality.title}</b>\n\n🪙 <b>Coin:</b> #${cleanSymbol}/USDT\n🎯 <b>Yön:</b> ${signal.type}\n💵 <b>Giriş Fiyatı:</b> $${formatPrice(currentPrice, currentPrice)}\n🛑 <b>Doğal ATR Stop (-%${signal.slPct}):</b> $${signal.sl}\n\n💼 <b>Güncel Kasa:</b> $${liveWalletBalance.toFixed(2)}\n💵 <b>Bileşik Marjin (Kasanın %${marginPct}'i):</b> <b>$${margin.toFixed(2)}</b>\n⚖️ <b>Dinamik Kaldıraç:</b> <b>${leverage}x</b> (Pozisyon: $${(margin * leverage).toFixed(1)})\n\n🎯 <b>Kademeli Kâr Hedefleri (${modeBadge}):</b>\n• <b>TP1 (+%${signal.tp1Pct} | +$${expectedTp1Dollar}):</b> $${signal.tp1}\n• <b>TP2:</b> $${signal.tp2}\n\n⚙️ <b>Kurumsal Onaylar (10 Filtre):</b>\n• Profil: ${prof.category}\n• Dominans Akışı: ${domData.badge}\n• Regresyon Kanalı (100,2): ${regData.badge}\n• Kurumsal Pivot: ${pivotData.badge}\n• Trend Gücü: ${adxData.badge}\n• Likidite: ${sweepData.badge}\n• Açık Pozisyon (OI): ${oiData.badge}\n• Rölatif Güç: ${rsBadge}\n• 15M Hacim: ${volData.badge}\n• Smart Money (SMC): ${smc.smcBadge}\n\n${lsSizeData.text}\n\n${candleData.reportText}\n\n${getStatsText()}\n\n🔗 <a href="https://www.binance.com/tr/futures/${symbol}">Binance Futures'ta Aç</a>\n\n⚠️ <i>"YTD" HEPSİ.</i>`;
                 await sendTelegramMessage(msg);
                 signalSentInThisCycle = true;
                 signalsInThisCycle++;
@@ -1834,7 +1956,7 @@ async function scanMarket() {
 
         if (!signalSentInThisCycle && (Date.now() - lastStatusReportTime >= 10 * 60 * 1000)) {
             const btcBadge = btc.btcTrend === "DUMP" ? "🔴 BTC Satışta" : btc.btcTrend === "PUMP" ? "🟢 BTC Alımda" : "⚪ Güvenli";
-            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${maxTotalActiveTrades}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & Akıllı Önbellek: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kalkan | /kapat | /bakiye <miktar> | /sifirla | /kasa | /karne</i>`);
+            await sendTelegramMessage(`👋 <b>Merhaba Uşak. Şansınız bilginiz daim olsun.</b>\n\n⏳ <b>[${getTurkishTimeString()}] TARAMA RAPORU</b>\n🌐 Seans: ${session} | Taranan: ${scannedCount} | Açık: ${activeTrades.size}/${maxTotalActiveTrades}\n⚡ BTC Kalkanı: %${btc.change15m} (${btcBadge})\n👑 Dominans: ${domData.badge}\n☁️ Bulut Hafıza & 10 Kurumsal Filtre: Aktif ✅\n\n${getStatsText()}\n\n⌨️ <i>Komutlar: /acik | /dominans | /kalkan | /kapat | /bakiye [miktar] | /sifirla | /kasa | /karne</i>`);
             lastStatusReportTime = Date.now();
         }
     } catch (err) {}
@@ -1844,17 +1966,20 @@ async function scanMarket() {
 // 9. ANA ÇALIŞTIRICI & OTOMATİK BULUT GERİ YÜKLEME
 // ==========================================
 async function runLoop() {
-    console.log("🚀 ScalpPro Quant V6 Pro (High Win-Rate, Smart Cache & Dominance) Başlatılıyor...");
+    console.log("🚀 ScalpPro Quant V6 Pro (10 Institutional Filters, Regression & Pivots) Başlatılıyor...");
     await initTelegramOffset();
-    const restored = await restoreFromTelegramCloudOnStartup();
+    const startupCloud = await restoreFromTelegramCloudOnStartup();
     const domInit = await checkDominanceCondition();
 
-    if (restored) {
+    if (startupCloud.restored) {
         const curBal = calculateCurrentBalance();
-        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO (YÜKSEK WIN-RATE MODU) GÜNCELLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} / ${maxTotalActiveTrades} adet (Tek Yön: ${maxSameSideTrades})\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n🛡️ <b>Yeni Zırhlar:</b> 1H EMA50+RSI Kesişimi, Genişletilmiş ATR Stop, Hızlı TP1 (0.85R) ve %70 Erken Başabaş Koruması aktif!`);
-    } else {
+        await sendTelegramMessage(`☁️🔄 <b>QUANT V6 PRO (10 KURUMSAL FİLTRE MODU) GÜNCELLENDİ!</b>\n\n📂 <b>Korunan Açık İşlem:</b> ${activeTrades.size} / ${maxTotalActiveTrades} adet (Tek Yön: ${maxSameSideTrades})\n💼 <b>Korunan Bileşik Kasa:</b> <b>$${curBal.toFixed(2)}</b>\n👑 <b>Canlı Dominans Filtresi:</b> ${domInit.badge}\n🛡️ <b>Yeni Zırhlar:</b> 100 Mumluk Regresyon Kanalı (100,2), Kurumsal Pivot Kalkanı (P/R1/S1), 1H EMA50+RSI ve %70 Erken Başabaş aktif!`);
+    } else if (!startupCloud.hadPinnedMessage) {
         await syncStateToTelegramCloud();
-        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: YÜKSEK WIN-RATE & MAKRO DOMİNANS AKTİF!</b>\n\n1️⃣ <b>Erken Başabaş & Hızlı TP1:</b> İşlemler TP1'e %70 yaklaştığında otomatik girişe çekilir.\n2️⃣ <b>Sıkı Trend Kalkanı:</b> 1H EMA50 + RSI ve 4H mum yönü onaylamadan ters işlem açılmaz.\n3️⃣ <b>Esnek Kalkan Limitleri:</b> Toplam <b>${maxTotalActiveTrades}</b> (Tek Yön: <b>${maxSameSideTrades}</b>) açık işlem sınırı aktif.`);
+        await sendTelegramMessage(`💎⚡ <b>QUANT V6 PRO: 10 KURUMSAL FİLTRE & MAKRO DOMİNANS AKTİF!</b>\n\n1️⃣ <b>Regresyon Kanalı (100,2) & Pivotlar:</b> Kanal tavanında Long, kanal tabanında Short ve direnç altında ters girişler engellenir.\n2️⃣ <b>Erken Başabaş & Hızlı TP1:</b> İşlemler TP1'e %70 yaklaştığında otomatik girişe çekilir.\n3️⃣ <b>Esnek Kalkan Limitleri:</b> Toplam <b>${maxTotalActiveTrades}</b> (Tek Yön: <b>${maxSameSideTrades}</b>) açık işlem sınırı aktif.`);
+    } else {
+        const curBal = calculateCurrentBalance();
+        await sendTelegramMessage(`🛡️ <b>QUANT V6 PRO YENİDEN BAŞLATILDI (YEDEK KORUMA MODU)</b>\nSabit mesaj korunarak mevcut yerel durumla ($${curBal.toFixed(2)}) devam ediliyor.`);
     }
 
     (async () => { while (true) { await pollTelegramUpdates(); await sleep(1200); } })();
